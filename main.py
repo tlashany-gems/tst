@@ -1,519 +1,241 @@
 """
-╔══════════════════════════════════════════════╗
-║        تيلثون تـلـاشـاني - بوت الموسيقى      ║
-║         Telethon TALASHNY Music Bot v7       ║
-╚══════════════════════════════════════════════╝
-py-tgcalls==2.0.0  |  Python 3.13 compatible
+🎵 Telegram Voice Chat Music Bot — Stream مباشر بدون تحميل
 """
 
-import os, asyncio, logging, glob, re
-
-from pyrogram import Client as PyroClient
+import asyncio
+import os
+import re
+from collections import deque
+from dotenv import load_dotenv
+from pyrogram import Client, filters
+from pyrogram.types import Message
 from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream, AudioQuality
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler,
-    ContextTypes, CallbackQueryHandler
-)
-
+from pytgcalls.types import AudioPiped, AudioParameters
 import yt_dlp
-import googleapiclient.discovery
 
-from config import (
-    BOT_TOKEN, ASSISTANT_API_ID, ASSISTANT_API_HASH,
-    SESSION_STRING, YOUTUBE_API_KEY
+load_dotenv()
+
+# ─── إعدادات (بتيجي من Railway Variables) ───
+API_ID            = int(os.getenv("API_ID", "0"))
+API_HASH          = os.getenv("API_HASH", "")
+BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
+USER_SESSION      = os.getenv("USER_SESSION", "")
+PYROGRAM_LICENSE  = os.getenv("PYROGRAM_LICENSE", "")
+
+# ─── Clients ───
+bot = Client(
+    "music_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
 )
 
-os.makedirs("logs", exist_ok=True)
-os.makedirs("downloads", exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[
-        logging.FileHandler("logs/bot.log", encoding="utf-8"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# ══════════════════════════════════════════════════
-# YouTube
-# ══════════════════════════════════════════════════
-youtube = googleapiclient.discovery.build(
-    "youtube", "v3", developerKey=YOUTUBE_API_KEY
+# الـ Userbot بيستخدم الـ Pyrogram License
+userbot = Client(
+    "userbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=USER_SESSION,
+    pyrogram_license=PYROGRAM_LICENSE,
 )
 
-def _parse_duration(iso: str) -> str:
-    m = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', iso)
-    if not m: return "?"
-    h, mn, s = (int(x) if x else 0 for x in m.groups())
-    return f"{h}:{mn:02d}:{s:02d}" if h else f"{mn}:{s:02d}"
+call_py = PyTgCalls(userbot)
 
-async def search_youtube(query: str):
-    req = youtube.search().list(part="snippet", q=query, type="video",
-                                maxResults=1, videoCategoryId="10")
-    res = req.execute()
-    if not res.get("items"):
-        raise Exception("مفيش نتايج!")
-    item   = res["items"][0]
-    vid_id = item["id"]["videoId"]
-    title  = item["snippet"]["title"]
-    det    = youtube.videos().list(part="contentDetails", id=vid_id).execute()
-    dur    = _parse_duration(det["items"][0]["contentDetails"]["duration"]) if det.get("items") else "؟"
-    return f"https://www.youtube.com/watch?v={vid_id}", title, dur
+# ─── State ───
+queues:  dict[int, deque] = {}
+playing: dict[int, dict]  = {}
 
-async def get_video_info(url: str):
-    try:
-        vid_id = url.split("v=")[1].split("&")[0] if "v=" in url else url.split("/")[-1]
-        res    = youtube.videos().list(part="snippet,contentDetails", id=vid_id).execute()
-        if res.get("items"):
-            item = res["items"][0]
-            return item["snippet"]["title"], _parse_duration(item["contentDetails"]["duration"])
-    except Exception as e:
-        logger.error(f"get_video_info: {e}")
-    return "غير معروف", "؟"
 
-async def download_audio(url: str, chat_id: int) -> str:
+# ─── دوال مساعدة ───
+def get_queue(chat_id: int) -> deque:
+    if chat_id not in queues:
+        queues[chat_id] = deque()
+    return queues[chat_id]
+
+
+def search_song(query: str) -> dict | None:
     ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "outtmpl": f"downloads/{chat_id}_%(id)s.%(ext)s",
-        "quiet": True, "no_warnings": True,
-        "postprocessors": [{"key": "FFmpegExtractAudio",
-                            "preferredcodec": "mp3", "preferredquality": "192"}],
+        "format"       : "bestaudio/best",
+        "quiet"        : True,
+        "no_warnings"  : True,
+        "noplaylist"   : True,
+        "skip_download": True,
     }
-    def _dl():
+    if not re.match(r"https?://", query):
+        query = f"ytsearch1:{query}"
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info   = ydl.extract_info(url, download=True)
-            vid_id = info.get("id", "")
-            p      = f"downloads/{chat_id}_{vid_id}.mp3"
-            if os.path.exists(p): return p
-            files  = glob.glob(f"downloads/{chat_id}_{vid_id}*")
-            if files: return files[0]
-            raise FileNotFoundError("الملف مش موجود")
-    return await asyncio.get_event_loop().run_in_executor(None, _dl)
+            info = ydl.extract_info(query, download=False)
+            if "entries" in info:
+                info = info["entries"][0]
+            stream_url = None
+            for fmt in reversed(info.get("formats", [])):
+                if fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
+                    stream_url = fmt["url"]
+                    break
+            if not stream_url:
+                stream_url = info["url"]
+            return {
+                "title"   : info.get("title", "Unknown"),
+                "url"     : stream_url,
+                "duration": info.get("duration", 0),
+                "webpage" : info.get("webpage_url", ""),
+            }
+    except Exception as e:
+        print(f"[search error] {e}")
+        return None
 
-def cleanup_downloads(chat_id: int):
-    for f in glob.glob(f"downloads/{chat_id}_*"):
-        try: os.remove(f)
-        except: pass
 
-# ══════════════════════════════════════════════════
-# مشغّل الموسيقى
-# ══════════════════════════════════════════════════
-music_players: dict = {}
+def fmt_duration(seconds: int) -> str:
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
 
-def get_player(chat_id: int) -> dict:
-    if chat_id not in music_players:
-        music_players[chat_id] = {"queue": [], "current": None,
-                                  "loop": False, "history": []}
-    return music_players[chat_id]
 
-def make_stream(file_path: str) -> MediaStream:
-    return MediaStream(file_path, audio_quality=AudioQuality.HIGH)
+# ─── منطق التشغيل ───
+async def play_track(chat_id: int, track: dict):
+    playing[chat_id] = track
+    try:
+        await call_py.change_stream(
+            chat_id,
+            AudioPiped(track["url"], AudioParameters(bitrate=128)),
+        )
+    except Exception:
+        await call_py.join_group_call(
+            chat_id,
+            AudioPiped(track["url"], AudioParameters(bitrate=128)),
+        )
 
-# ══════════════════════════════════════════════════
-# الحساب المساعد
-# ══════════════════════════════════════════════════
-pyro_client: PyroClient = None
-tgcalls: PyTgCalls = None
-bot_app = None
 
-async def setup_assistant():
-    global pyro_client, tgcalls
+async def play_next(chat_id: int):
+    queue = get_queue(chat_id)
+    if queue:
+        await play_track(chat_id, queue.popleft())
+    else:
+        playing.pop(chat_id, None)
+        try:
+            await call_py.leave_group_call(chat_id)
+        except Exception:
+            pass
 
-    pyro_client = PyroClient(
-        name="assistant",
-        api_id=ASSISTANT_API_ID,
-        api_hash=ASSISTANT_API_HASH,
-        session_string=SESSION_STRING,
-        no_updates=True
-    )
-    tgcalls = PyTgCalls(pyro_client)
 
-    @tgcalls.on_stream_end()
-    async def on_stream_end(client, update):
-        cid    = update.chat_id
-        player = get_player(cid)
-
-        if player["loop"] and player["current"]:
-            try: await tgcalls.change_stream(cid, make_stream(player["current"]["file"]))
-            except Exception as e: logger.error(f"loop: {e}")
-            return
-
-        if player["current"]: player["history"].append(player["current"])
-        if player["queue"]:   player["queue"].pop(0)
-
-        if player["queue"]:
-            nxt = player["queue"][0]; player["current"] = nxt
-            try:
-                await tgcalls.change_stream(cid, make_stream(nxt["file"]))
-                if bot_app:
-                    await bot_app.bot.send_message(
-                        cid,
-                        f"🎵 *بيشتغل دلوقتي:*\n━━━━━━━━━━━━━━━\n"
-                        f"🎧 {nxt['title']}\n⏱ {nxt['duration']}\n"
-                        f"📋 باقي: {len(player['queue'])-1} أغنية",
-                        parse_mode="Markdown", reply_markup=_now_kb()
-                    )
-            except Exception as e: logger.error(f"auto-play: {e}")
-        else:
-            player["current"] = None
-            try:
-                await tgcalls.leave_group_call(cid)
-                cleanup_downloads(cid)
-                if bot_app: await bot_app.bot.send_message(cid, "⏹ خلصت القايمة!")
-            except: pass
-
-    await pyro_client.start()
-    await tgcalls.start()
-    me = await pyro_client.get_me()
-    logger.info(f"✅ الحساب المساعد: {me.first_name} (@{me.username})")
-    print(f"✅ الحساب المساعد: {me.first_name} (@{me.username})")
-
-# ══════════════════════════════════════════════════
-# أزرار التحكم
-# ══════════════════════════════════════════════════
-def _now_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏮ السابقة", callback_data="prev"),
-         InlineKeyboardButton("⏸ وقّف",    callback_data="pause"),
-         InlineKeyboardButton("⏭ التالية", callback_data="skip")],
-        [InlineKeyboardButton("🔁 تكرار",      callback_data="loop"),
-         InlineKeyboardButton("⏹ إيقاف كلي", callback_data="stop")],
-        [InlineKeyboardButton("📋 القايمة", callback_data="queue"),
-         InlineKeyboardButton("🎵 الحالية", callback_data="now")]
-    ])
-
-def _paused_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏮ السابقة",  callback_data="prev"),
-         InlineKeyboardButton("▶️ كمّل",    callback_data="resume"),
-         InlineKeyboardButton("⏭ التالية", callback_data="skip")],
-        [InlineKeyboardButton("🔁 تكرار",      callback_data="loop"),
-         InlineKeyboardButton("⏹ إيقاف كلي", callback_data="stop")],
-        [InlineKeyboardButton("📋 القايمة", callback_data="queue"),
-         InlineKeyboardButton("🎵 الحالية", callback_data="now")]
-    ])
-
-# ══════════════════════════════════════════════════
-# أوامر البوت
-# ══════════════════════════════════════════════════
-async def cmd_start(u: Update, _):
-    await u.message.reply_text(
-        "🎵 *أهلاً بك في تيلثون تـلـاشـاني!* 🎧\n\n"
-        "📌 *الأوامر:*\n"
-        "  `/play <اسم أو رابط>` — شغّل أغنية\n"
-        "  `/pause` ⏸ | `/resume` ▶️\n"
-        "  `/skip` ⏭ | `/prev` ⏮\n"
-        "  `/stop` ⏹ | `/queue` 📋\n"
-        "  `/now` 🎵 | `/loop` 🔁\n"
-        "  `/vcstart` 🎙 | `/vcend` 📴\n"
-        "  `/help` — كل الأوامر\n",
-        parse_mode="Markdown"
+# ─── أوامر البوت ───
+@bot.on_message(filters.command("start"))
+async def cmd_start(_, msg: Message):
+    await msg.reply_text(
+        "🎵 **Music Bot — Stream مباشر**\n\n"
+        "▶️ `/play <اسم الأغنية>` — شغّل أغنية\n"
+        "⏭️ `/skip` — تخطي\n"
+        "⏹️ `/stop` — وقف\n"
+        "📋 `/queue` — قائمة الانتظار\n"
+        "🎚️ `/volume <1-200>` — الصوت\n"
+        "🎵 `/now` — الأغنية الحالية"
     )
 
-async def cmd_play(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    chat_id = u.effective_chat.id
-    query   = " ".join(ctx.args).strip() if ctx.args else ""
-    if not query and u.message.reply_to_message:
-        query = (u.message.reply_to_message.text or "").strip()
-    if not query:
-        await u.message.reply_text("⚠️ استخدم: `/play <اسم أو رابط>`", parse_mode="Markdown")
+
+@bot.on_message(filters.command("play") & filters.group)
+async def cmd_play(_, msg: Message):
+    if len(msg.command) < 2:
+        await msg.reply_text("❌ اكتب اسم الأغنية!\nمثال: `/play Fairuz`")
         return
-
-    msg = await u.message.reply_text("🔍 جاري البحث...")
-    try:
-        is_url = "youtube.com" in query or "youtu.be" in query
-        if is_url:
-            title, dur = await get_video_info(query)
-            url = query
-        else:
-            url, title, dur = await search_youtube(query)
-
-        await msg.edit_text(f"⬇️ جاري التحميل:\n🎧 *{title}*...", parse_mode="Markdown")
-        file_path = await download_audio(url, chat_id)
-        player    = get_player(chat_id)
-        requester = u.effective_user.first_name
-        track     = {"title": title, "duration": dur, "url": url,
-                     "file": file_path, "requested_by": requester}
-
-        if player["current"] is None:
-            player["queue"].append(track)
-            player["current"] = track
-            try:
-                await tgcalls.join_group_call(chat_id, make_stream(file_path))
-            except Exception:
-                try: await tgcalls.change_stream(chat_id, make_stream(file_path))
-                except Exception as e2:
-                    await msg.edit_text(f"❌ فشل التشغيل: {e2}\nاستخدم /vcstart أولاً")
-                    return
-            await msg.edit_text(
-                f"🎵 *بيشتغل دلوقتي:*\n━━━━━━━━━━━━━━━\n"
-                f"🎧 {title}\n⏱ المدة: {dur}\n"
-                f"👤 طلب: {requester}\n📋 القايمة: {len(player['queue'])} أغنية",
-                parse_mode="Markdown", reply_markup=_now_kb()
-            )
-        else:
-            player["queue"].append(track)
-            await msg.edit_text(
-                f"✅ *تمت الإضافة للقايمة!*\n━━━━━━━━━━━━━━━\n"
-                f"🎧 {title}\n⏱ {dur}\n"
-                f"📍 الترتيب: #{len(player['queue'])}\n👤 طلب: {requester}",
-                parse_mode="Markdown"
-            )
-    except Exception as e:
-        logger.error(f"cmd_play: {e}")
-        await msg.edit_text(f"❌ حصل خطأ: {e}")
-
-async def cmd_pause(u: Update, _):
-    try:
-        await tgcalls.pause_stream(u.effective_chat.id)
-        await u.message.reply_text("⏸ تم الإيقاف المؤقت", reply_markup=_paused_kb())
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
-
-async def cmd_resume(u: Update, _):
-    try:
-        await tgcalls.resume_stream(u.effective_chat.id)
-        await u.message.reply_text("▶️ تم الاستئناف", reply_markup=_now_kb())
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
-
-async def cmd_skip(u: Update, _):
-    chat_id = u.effective_chat.id
-    player  = get_player(chat_id)
-    try:
-        if player["current"]: player["history"].append(player["current"])
-        if player["queue"]:   player["queue"].pop(0)
-        if player["queue"]:
-            nxt = player["queue"][0]; player["current"] = nxt
-            await tgcalls.change_stream(chat_id, make_stream(nxt["file"]))
-            await u.message.reply_text(
-                f"⏭ *تم التخطي!*\n🎧 {nxt['title']}\n⏱ {nxt['duration']}\n📋 باقي: {len(player['queue'])}",
-                parse_mode="Markdown", reply_markup=_now_kb()
-            )
-        else:
-            player["current"] = None
-            await tgcalls.leave_group_call(chat_id)
-            cleanup_downloads(chat_id)
-            await u.message.reply_text("⏹ خلصت القايمة!")
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
-
-async def cmd_prev(u: Update, _):
-    chat_id = u.effective_chat.id
-    player  = get_player(chat_id)
-    if not player["history"]:
-        await u.message.reply_text("⚠️ مفيش أغنية سابقة!"); return
-    prev = player["history"].pop()
-    if player["current"]: player["queue"].insert(0, player["current"])
-    player["queue"].insert(0, prev); player["current"] = prev
-    try:
-        await tgcalls.change_stream(chat_id, make_stream(prev["file"]))
-        await u.message.reply_text(
-            f"⏮ *رجعنا للسابقة!*\n🎧 {prev['title']}\n⏱ {prev['duration']}",
-            parse_mode="Markdown", reply_markup=_now_kb()
+    query   = " ".join(msg.command[1:])
+    chat_id = msg.chat.id
+    status  = await msg.reply_text(f"🔍 بدور على: **{query}**...")
+    track   = await asyncio.get_event_loop().run_in_executor(None, search_song, query)
+    if not track:
+        await status.edit_text("❌ مش لاقي الأغنية دي، جرب اسم تاني!")
+        return
+    dur = fmt_duration(track["duration"]) if track["duration"] else "?"
+    if playing.get(chat_id):
+        get_queue(chat_id).append(track)
+        pos = len(get_queue(chat_id))
+        await status.edit_text(
+            f"✅ **اتضافت للقائمة:**\n🎵 {track['title']}\n⏱️ {dur}  |  📋 #{pos}"
         )
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
+    else:
+        await status.edit_text(f"▶️ **بيشغل:**\n🎵 {track['title']}\n⏱️ {dur}")
+        await play_track(chat_id, track)
 
-async def cmd_stop(u: Update, _):
-    chat_id = u.effective_chat.id
-    player  = get_player(chat_id)
-    try:
-        await tgcalls.leave_group_call(chat_id)
-        player["queue"].clear(); player["current"] = None; player["history"].clear()
-        cleanup_downloads(chat_id)
-        await u.message.reply_text("⏹ تم إيقاف الموسيقى!")
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
 
-async def cmd_queue(u: Update, _):
-    player = get_player(u.effective_chat.id)
-    if not player["queue"]:
-        await u.message.reply_text("📋 القايمة فاضية!\nاستخدم `/play`.", parse_mode="Markdown"); return
-    lines = ["🎵 *قايمة الأغاني:*\n━━━━━━━━━━━━━━━"]
-    for i, t in enumerate(player["queue"]):
-        lines.append(f"{'▶️' if i==0 else str(i)+'.'} {t['title']} | ⏱ {t['duration']}")
-    lines.append(f"━━━━━━━━━━━━━━━\nالإجمالي: {len(player['queue'])} أغنية")
-    await u.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-async def cmd_now(u: Update, _):
-    player = get_player(u.effective_chat.id)
-    if not player["current"]:
-        await u.message.reply_text("📭 مفيش أغنية شغّالة!\nاستخدم `/play`.", parse_mode="Markdown"); return
-    t = player["current"]
-    await u.message.reply_text(
-        f"🎧 *الأغنية الحالية:*\n━━━━━━━━━━━━━━━\n"
-        f"🎵 {t['title']}\n⏱ {t['duration']}\n"
-        f"👤 {t.get('requested_by','؟')} | 🔁 {'شغّال' if player['loop'] else 'مطفي'}\n"
-        f"📋 باقي: {len(player['queue'])}",
-        parse_mode="Markdown", reply_markup=_now_kb()
+@bot.on_message(filters.command("now") & filters.group)
+async def cmd_now(_, msg: Message):
+    track = playing.get(msg.chat.id)
+    if not track:
+        await msg.reply_text("😶 مفيش أغنية شغالة دلوقتي.")
+        return
+    dur = fmt_duration(track["duration"]) if track["duration"] else "?"
+    await msg.reply_text(
+        f"▶️ **شغال دلوقتي:**\n🎵 [{track['title']}]({track['webpage']})\n⏱️ {dur}",
+        disable_web_page_preview=True,
     )
 
-async def cmd_loop(u: Update, _):
-    player = get_player(u.effective_chat.id)
-    player["loop"] = not player["loop"]
-    await u.message.reply_text(f"التكرار: {'🔁 شغّال' if player['loop'] else '➡️ مطفي'}")
 
-async def cmd_vcstart(u: Update, _):
-    chat_id = u.effective_chat.id
-    silent  = "silent.mp3"
-    if not os.path.exists(silent):
-        os.system("ffmpeg -f lavfi -i anullsrc=r=48000:cl=stereo "
-                  "-t 3 -q:a 9 -acodec libmp3lame silent.mp3 -y -loglevel quiet")
+@bot.on_message(filters.command("skip") & filters.group)
+async def cmd_skip(_, msg: Message):
+    if not playing.get(msg.chat.id):
+        await msg.reply_text("❌ مفيش أغنية شغالة!")
+        return
+    await msg.reply_text("⏭️ بيتخطى...")
+    await play_next(msg.chat.id)
+
+
+@bot.on_message(filters.command("stop") & filters.group)
+async def cmd_stop(_, msg: Message):
+    chat_id = msg.chat.id
+    queues.pop(chat_id, None)
+    playing.pop(chat_id, None)
     try:
-        await tgcalls.join_group_call(chat_id, make_stream(silent))
-        await u.message.reply_text(
-            "🎙 *تم فتح الدردشة الصوتية!*\nاستخدم `/play` لتشغيل أغنية",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await u.message.reply_text(f"❌ فشل: {e}")
+        await call_py.leave_group_call(chat_id)
+    except Exception:
+        pass
+    await msg.reply_text("⏹️ تم الإيقاف ومسح القائمة!")
 
-async def cmd_vcend(u: Update, _):
-    chat_id = u.effective_chat.id
-    player  = get_player(chat_id)
+
+@bot.on_message(filters.command("queue") & filters.group)
+async def cmd_queue(_, msg: Message):
+    chat_id = msg.chat.id
+    queue   = get_queue(chat_id)
+    current = playing.get(chat_id)
+    if not current and not queue:
+        await msg.reply_text("📋 القائمة فاضية!")
+        return
+    lines = ["📋 **قائمة الانتظار:**\n"]
+    if current:
+        lines.append(f"▶️ **{current['title']}** ← شغال دلوقتي\n")
+    for i, t in enumerate(queue, 1):
+        dur = fmt_duration(t["duration"]) if t["duration"] else "?"
+        lines.append(f"`{i}.` {t['title']} — ⏱️ {dur}")
+    if not queue:
+        lines.append("_مفيش أغاني جاية_")
+    await msg.reply_text("\n".join(lines))
+
+
+@bot.on_message(filters.command("volume") & filters.group)
+async def cmd_volume(_, msg: Message):
+    if len(msg.command) < 2 or not msg.command[1].isdigit():
+        await msg.reply_text("❌ مثال: `/volume 80`")
+        return
+    vol = max(1, min(200, int(msg.command[1])))
     try:
-        await tgcalls.leave_group_call(chat_id)
-        player["queue"].clear(); player["current"] = None
-        cleanup_downloads(chat_id)
-        await u.message.reply_text("📴 تم إغلاق الدردشة الصوتية!")
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
+        await call_py.change_volume_call(msg.chat.id, vol)
+        await msg.reply_text(f"🔊 الصوت: **{vol}%**")
+    except Exception:
+        await msg.reply_text("❌ مش قادر أغير الصوت دلوقتي.")
 
-async def cmd_help(u: Update, _):
-    await u.message.reply_text(
-        "📌 *كل أوامر تيلثون تـلـاشـاني* 📌\n"
-        "═══════════════════\n"
-        "🎵 `/play <اسم/رابط>` — شغّل أو أضف للقايمة\n"
-        "⏸ `/pause` — وقّف مؤقتاً\n"
-        "▶️ `/resume` — كمّل\n"
-        "⏭ `/skip` أو `/next` — التالية\n"
-        "⏮ `/prev` — السابقة\n"
-        "⏹ `/stop` — وقّف كل شيء\n"
-        "📋 `/queue` أو `/q` — القايمة\n"
-        "🎵 `/now` أو `/np` — الحالية\n"
-        "🔁 `/loop` — تكرار\n"
-        "═══════════════════\n"
-        "🎙 `/vcstart` — افتح الدردشة الصوتية\n"
-        "📴 `/vcend` — اقفل الدردشة الصوتية\n"
-        "═══════════════════\n"
-        "💡 الأزرار تحت رسالة الأغنية للتحكم السريع!",
-        parse_mode="Markdown"
-    )
 
-# ══════════════════════════════════════════════════
-# Callback Buttons
-# ══════════════════════════════════════════════════
-async def button_handler(u: Update, _):
-    q       = u.callback_query
-    chat_id = q.message.chat_id
-    data    = q.data
-    player  = get_player(chat_id)
-    await q.answer()
+# ─── Events ───
+@call_py.on_stream_end()
+async def on_stream_end(_, update):
+    await play_next(update.chat_id)
 
-    if data == "pause":
-        try:
-            await tgcalls.pause_stream(chat_id)
-            await q.edit_message_reply_markup(_paused_kb())
-        except Exception as e: await q.answer(f"❌ {e}", show_alert=True)
 
-    elif data == "resume":
-        try:
-            await tgcalls.resume_stream(chat_id)
-            await q.edit_message_reply_markup(_now_kb())
-        except Exception as e: await q.answer(f"❌ {e}", show_alert=True)
-
-    elif data == "skip":
-        if player["current"]: player["history"].append(player["current"])
-        if player["queue"]:   player["queue"].pop(0)
-        if player["queue"]:
-            nxt = player["queue"][0]; player["current"] = nxt
-            try:
-                await tgcalls.change_stream(chat_id, make_stream(nxt["file"]))
-                await q.edit_message_text(
-                    f"🎵 *بيشتغل دلوقتي:*\n━━━━━━━━━━━━━━━\n"
-                    f"🎧 {nxt['title']}\n⏱ {nxt['duration']}\n📋 باقي: {len(player['queue'])}",
-                    parse_mode="Markdown", reply_markup=_now_kb()
-                )
-            except Exception as e: await q.answer(f"❌ {e}", show_alert=True)
-        else:
-            player["current"] = None
-            try:
-                await tgcalls.leave_group_call(chat_id)
-                cleanup_downloads(chat_id)
-                await q.edit_message_text("⏹ خلصت القايمة!")
-            except: pass
-
-    elif data == "prev":
-        if not player["history"]:
-            await q.answer("⚠️ مفيش أغنية سابقة!", show_alert=True); return
-        prev = player["history"].pop()
-        if player["current"]: player["queue"].insert(0, player["current"])
-        player["queue"].insert(0, prev); player["current"] = prev
-        try:
-            await tgcalls.change_stream(chat_id, make_stream(prev["file"]))
-            await q.edit_message_text(
-                f"⏮ *رجعنا للسابقة!*\n🎧 {prev['title']}\n⏱ {prev['duration']}",
-                parse_mode="Markdown", reply_markup=_now_kb()
-            )
-        except Exception as e: await q.answer(f"❌ {e}", show_alert=True)
-
-    elif data == "stop":
-        try:
-            await tgcalls.leave_group_call(chat_id)
-            player["queue"].clear(); player["current"] = None; player["history"].clear()
-            cleanup_downloads(chat_id)
-            await q.edit_message_text("⏹ تم إيقاف الموسيقى!")
-        except Exception as e: await q.answer(f"❌ {e}", show_alert=True)
-
-    elif data == "loop":
-        player["loop"] = not player["loop"]
-        await q.answer(f"التكرار: {'🔁 شغّال' if player['loop'] else '➡️ مطفي'}")
-
-    elif data == "queue":
-        if not player["queue"]:
-            await q.answer("📋 القايمة فاضية!", show_alert=True); return
-        lines = [f"{'▶️' if i==0 else str(i)+'.'} {t['title'][:28]} | {t['duration']}"
-                 for i, t in enumerate(player["queue"][:8])]
-        if len(player["queue"]) > 8: lines.append(f"... و{len(player['queue'])-8} أغاني")
-        await q.answer("\n".join(lines), show_alert=True)
-
-    elif data == "now":
-        if player["current"]:
-            t = player["current"]
-            await q.answer(f"🎵 {t['title'][:40]}\n⏱ {t['duration']}", show_alert=True)
-        else:
-            await q.answer("مفيش أغنية شغّالة!", show_alert=True)
-
-# ══════════════════════════════════════════════════
-# تشغيل
-# ══════════════════════════════════════════════════
-async def post_init(app):
-    global bot_app
-    bot_app = app
-    await setup_assistant()
-
-def main():
-    print("╔══════════════════════════════════════╗")
-    print("║   تيلثون تـلـاشـاني - Music Bot v7   ║")
-    print("╚══════════════════════════════════════╝\n")
-
-    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
-
-    for cmd, func in [
-        ("start",   cmd_start),  ("play",    cmd_play),
-        ("pause",   cmd_pause),  ("resume",  cmd_resume),
-        ("skip",    cmd_skip),   ("next",    cmd_skip),
-        ("prev",    cmd_prev),   ("stop",    cmd_stop),
-        ("queue",   cmd_queue),  ("q",       cmd_queue),
-        ("now",     cmd_now),    ("np",      cmd_now),
-        ("loop",    cmd_loop),   ("vcstart", cmd_vcstart),
-        ("vcend",   cmd_vcend),  ("help",    cmd_help),
-    ]:
-        app.add_handler(CommandHandler(cmd, func))
-
-    app.add_handler(CallbackQueryHandler(button_handler))
-    print("🤖 البوت شغال!\n")
-    app.run_polling()
+# ─── تشغيل ───
+async def main():
+    print("🚀 بيشتغل...")
+    await asyncio.gather(bot.start(), userbot.start())
+    await call_py.start()
+    print("✅ البوت جاهز!")
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
