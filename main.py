@@ -1,19 +1,16 @@
 """
-🎵 Telegram Voice Chat Music Bot — Stream مباشر بدون تحميل
-pytgcalls v2.1.0 + pyrogram v2.0.106
+🎵 Telegram Voice Chat Music Bot
+py-tgcalls (latest) + pyrogram v2.0.106
 """
 
 import asyncio
 import os
 import re
-from collections import deque
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls, idle
-from pytgcalls.types import Update
-from pytgcalls.types.input_stream import AudioPiped
-from pytgcalls.types.input_stream.quality import HighQualityAudio
+from pytgcalls.types import MediaStream
 import yt_dlp
 
 load_dotenv()
@@ -26,18 +23,9 @@ USER_SESSION     = os.getenv("USER_SESSION", "")
 PYROGRAM_LICENSE = os.getenv("PYROGRAM_LICENSE", "")
 
 # ─── Clients ───
-bot = Client(
-    "music_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-)
+bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-userbot_kwargs = dict(
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=USER_SESSION,
-)
+userbot_kwargs = dict(api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
 if PYROGRAM_LICENSE:
     userbot_kwargs["pyrogram_license"] = PYROGRAM_LICENSE
 
@@ -100,11 +88,11 @@ def fmt_duration(seconds) -> str:
 # ─── تشغيل ───
 async def play_track(chat_id: int, track: dict):
     playing[chat_id] = track
-    stream = AudioPiped(track["url"], HighQualityAudio())
+    stream = MediaStream(track["url"])
     try:
         await call_py.change_stream(chat_id, stream)
     except Exception:
-        await call_py.join_group_call(chat_id, stream)
+        await call_py.play(chat_id, stream)
 
 
 async def play_next(chat_id: int):
@@ -114,7 +102,7 @@ async def play_next(chat_id: int):
     else:
         playing.pop(chat_id, None)
         try:
-            await call_py.leave_group_call(chat_id)
+            await call_py.leave_call(chat_id)
         except Exception:
             pass
 
@@ -123,7 +111,7 @@ async def play_next(chat_id: int):
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, msg: Message):
     await msg.reply_text(
-        "🎵 **Music Bot — Stream مباشر**\n\n"
+        "🎵 **Music Bot**\n\n"
         "▶️ `/play <اسم الأغنية>` — شغّل\n"
         "🎵 `/now` — الأغنية الحالية\n"
         "⏭️ `/skip` — تخطي\n"
@@ -186,10 +174,10 @@ async def cmd_stop(_, msg: Message):
     queues.pop(chat_id, None)
     playing.pop(chat_id, None)
     try:
-        await call_py.leave_group_call(chat_id)
+        await call_py.leave_call(chat_id)
     except Exception:
         pass
-    await msg.reply_text("⏹️ تم الإيقاف ومسح القائمة!")
+    await msg.reply_text("⏹️ تم الإيقاف!")
 
 
 @bot.on_message(filters.command("queue") & filters.group)
@@ -220,13 +208,13 @@ async def cmd_volume(_, msg: Message):
         await call_py.change_volume_call(msg.chat.id, vol)
         await msg.reply_text(f"🔊 الصوت: **{vol}%**")
     except Exception:
-        await msg.reply_text("❌ مش قادر أغير الصوت دلوقتي.")
+        await msg.reply_text("❌ مش قادر أغير الصوت.")
 
 
 # ─── Stream End ───
 @call_py.on_stream_end()
-async def on_stream_end(_, update: Update):
-    await play_next(update.chat_id)
+async def on_stream_end(_, chat_id: int, __):
+    await play_next(chat_id)
 
 
 # ─── تشغيل ───
