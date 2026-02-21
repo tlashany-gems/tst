@@ -1,5 +1,6 @@
 """
 🎵 Telegram Voice Chat Music Bot — Stream مباشر بدون تحميل
+pytgcalls v2.1.0 + pyrogram v2.0.106
 """
 
 import asyncio
@@ -9,7 +10,7 @@ from collections import deque
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pytgcalls import PyTgCalls
+from pytgcalls import PyTgCalls, idle
 from pytgcalls.types import Update
 from pytgcalls.types.input_stream import AudioPiped
 from pytgcalls.types.input_stream.quality import HighQualityAudio
@@ -70,7 +71,6 @@ def search_song(query: str) -> dict | None:
             info = ydl.extract_info(query, download=False)
             if "entries" in info:
                 info = info["entries"][0]
-            # جيب أفضل audio-only stream
             stream_url = None
             for fmt in reversed(info.get("formats", [])):
                 if fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
@@ -89,7 +89,7 @@ def search_song(query: str) -> dict | None:
         return None
 
 
-def fmt_duration(seconds: int) -> str:
+def fmt_duration(seconds) -> str:
     if not seconds:
         return "?"
     m, s = divmod(int(seconds), 60)
@@ -138,33 +138,22 @@ async def cmd_play(_, msg: Message):
     if len(msg.command) < 2:
         await msg.reply_text("❌ اكتب اسم الأغنية!\nمثال: `/play Fairuz`")
         return
-
     query   = " ".join(msg.command[1:])
     chat_id = msg.chat.id
     status  = await msg.reply_text(f"🔍 بدور على: **{query}**...")
-
-    track = await asyncio.get_event_loop().run_in_executor(None, search_song, query)
-
+    track   = await asyncio.get_event_loop().run_in_executor(None, search_song, query)
     if not track:
         await status.edit_text("❌ مش لاقي الأغنية دي، جرب اسم تاني!")
         return
-
     dur = fmt_duration(track["duration"])
-
     if playing.get(chat_id):
         get_queue(chat_id).append(track)
         pos = len(get_queue(chat_id))
         await status.edit_text(
-            f"✅ **اتضافت للقائمة:**\n"
-            f"🎵 {track['title']}\n"
-            f"⏱️ {dur}  |  📋 #{pos}"
+            f"✅ **اتضافت للقائمة:**\n🎵 {track['title']}\n⏱️ {dur}  |  📋 #{pos}"
         )
     else:
-        await status.edit_text(
-            f"▶️ **بيشغل:**\n"
-            f"🎵 {track['title']}\n"
-            f"⏱️ {dur}"
-        )
+        await status.edit_text(f"▶️ **بيشغل:**\n🎵 {track['title']}\n⏱️ {dur}")
         await play_track(chat_id, track)
 
 
@@ -208,11 +197,9 @@ async def cmd_queue(_, msg: Message):
     chat_id = msg.chat.id
     queue   = get_queue(chat_id)
     current = playing.get(chat_id)
-
     if not current and not queue:
         await msg.reply_text("📋 القائمة فاضية!")
         return
-
     lines = ["📋 **قائمة الانتظار:**\n"]
     if current:
         lines.append(f"▶️ **{current['title']}** ← شغال دلوقتي\n")
@@ -220,7 +207,6 @@ async def cmd_queue(_, msg: Message):
         lines.append(f"`{i}.` {t['title']} — ⏱️ {fmt_duration(t['duration'])}")
     if not queue:
         lines.append("_مفيش أغاني جاية_")
-
     await msg.reply_text("\n".join(lines))
 
 
@@ -237,7 +223,7 @@ async def cmd_volume(_, msg: Message):
         await msg.reply_text("❌ مش قادر أغير الصوت دلوقتي.")
 
 
-# ─── Stream End Event ───
+# ─── Stream End ───
 @call_py.on_stream_end()
 async def on_stream_end(_, update: Update):
     await play_next(update.chat_id)
@@ -246,10 +232,11 @@ async def on_stream_end(_, update: Update):
 # ─── تشغيل ───
 async def main():
     print("🚀 بيشتغل...")
-    await asyncio.gather(bot.start(), userbot.start())
+    await bot.start()
+    await userbot.start()
     await call_py.start()
     print("✅ البوت جاهز!")
-    await asyncio.Event().wait()
+    await idle()
 
 if __name__ == "__main__":
     asyncio.run(main())
