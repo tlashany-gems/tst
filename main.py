@@ -1,6 +1,6 @@
 """
 🎵 Telegram Voice Chat Music Bot
-py-tgcalls + pyrofork (متوافقين 100%)
+py-tgcalls + pyrofork
 """
 
 import asyncio
@@ -11,11 +11,12 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls, idle
 from pytgcalls.types import MediaStream
+
 import yt_dlp
 
 load_dotenv()
 
-# ─── إعدادات (من Railway Variables) ───
+# ─── إعدادات ───
 API_ID       = int(os.getenv("API_ID", "0"))
 API_HASH     = os.getenv("API_HASH", "")
 BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
@@ -217,10 +218,18 @@ async def cmd_volume(_, msg: Message):
         await msg.reply_text("❌ مش قادر أغير الصوت.")
 
 
-# ─── Stream End (py-tgcalls v2.x API) ───
-@call_py.on_stream_end()
-async def on_stream_end(_, update):
-    await play_next(update.chat_id)
+# ─── Stream End Handler (compatible with py-tgcalls 2.x) ───
+try:
+    from pytgcalls import filters as tgfilters
+
+    @call_py.on_update(tgfilters.stream_end)
+    async def stream_end_handler(_, update):
+        await play_next(update.chat_id)
+
+except (ImportError, AttributeError):
+    @call_py.on_stream_end()
+    async def stream_end_handler(_, update):
+        await play_next(update.chat_id)
 
 
 # ─── تشغيل ───
