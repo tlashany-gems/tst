@@ -1,26 +1,36 @@
 """
 🎵 Telegram Voice Chat Music Bot
-py-tgcalls + pyrofork
 """
 
 import asyncio
 import os
 import re
+import logging
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls, idle
 from pytgcalls.types import MediaStream
-
 import yt_dlp
+
+# ─── Logging واضح ───
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# ─── إعدادات ───
 API_ID       = int(os.getenv("API_ID", "0"))
 API_HASH     = os.getenv("API_HASH", "")
 BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 USER_SESSION = os.getenv("USER_SESSION", "")
+
+logger.info(f"API_ID: {API_ID}")
+logger.info(f"API_HASH: {API_HASH[:5]}...")
+logger.info(f"BOT_TOKEN: {BOT_TOKEN[:10]}...")
+logger.info(f"USER_SESSION length: {len(USER_SESSION)}")
 
 # ─── Clients ───
 bot = Client(
@@ -44,7 +54,6 @@ queues:  dict[int, list] = {}
 playing: dict[int, dict] = {}
 
 
-# ─── Helpers ───
 def get_queue(chat_id: int) -> list:
     if chat_id not in queues:
         queues[chat_id] = []
@@ -80,7 +89,7 @@ def search_song(query: str) -> dict | None:
                 "webpage" : info.get("webpage_url", ""),
             }
     except Exception as e:
-        print(f"[search error] {e}")
+        logger.error(f"[search error] {e}")
         return None
 
 
@@ -92,7 +101,6 @@ def fmt_duration(seconds) -> str:
     return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
 
 
-# ─── تشغيل ───
 async def play_track(chat_id: int, track: dict):
     playing[chat_id] = track
     stream = MediaStream(track["url"])
@@ -114,22 +122,37 @@ async def play_next(chat_id: int):
             pass
 
 
-# ─── أوامر ───
+# ─── Handler لكل رسالة عشان نشوف البوت بيستقبل ولا لأ ───
+@bot.on_message()
+async def debug_all(_, msg: Message):
+    logger.info(f"📩 رسالة وصلت! chat_id={msg.chat.id} type={msg.chat.type} text={msg.text}")
+
+
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, msg: Message):
+    logger.info(f"✅ /start من {msg.from_user.id}")
+    name = msg.from_user.first_name if msg.from_user else "صديقي"
     await msg.reply_text(
-        "🎵 **Music Bot**\n\n"
-        "▶️ `/play <اسم الأغنية>` — شغّل\n"
-        "🎵 `/now` — الأغنية الحالية\n"
-        "⏭️ `/skip` — تخطي\n"
-        "⏹️ `/stop` — وقف\n"
-        "📋 `/queue` — القائمة\n"
-        "🔊 `/volume <1-200>` — الصوت"
+        f"👋 أهلاً وسهلاً **{name}**!\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🎵 **بوت الموسيقى جاهز لخدمتك!**\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "**الأوامر المتاحة:**\n\n"
+        "▶️ `/play <اسم الأغنية>` — شغّل أغنية\n"
+        "🎵 `/now` — الأغنية الشغالة دلوقتي\n"
+        "📋 `/queue` — قائمة الانتظار\n"
+        "⏭️ `/skip` — تخطي الأغنية\n"
+        "⏹️ `/stop` — وقف وخروج\n"
+        "🔊 `/volume <1-200>` — التحكم في الصوت\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "💡 **مثال:** `/play Fairuz`\n"
+        "━━━━━━━━━━━━━━━━━━"
     )
 
 
-@bot.on_message(filters.command("play") & filters.group)
+@bot.on_message(filters.command("play"))
 async def cmd_play(_, msg: Message):
+    logger.info(f"▶️ /play من chat_id={msg.chat.id}")
     if len(msg.command) < 2:
         await msg.reply_text("❌ اكتب اسم الأغنية!\nمثال: `/play Fairuz`")
         return
@@ -152,7 +175,7 @@ async def cmd_play(_, msg: Message):
         await play_track(chat_id, track)
 
 
-@bot.on_message(filters.command("now") & filters.group)
+@bot.on_message(filters.command("now"))
 async def cmd_now(_, msg: Message):
     track = playing.get(msg.chat.id)
     if not track:
@@ -166,7 +189,7 @@ async def cmd_now(_, msg: Message):
     )
 
 
-@bot.on_message(filters.command("skip") & filters.group)
+@bot.on_message(filters.command("skip"))
 async def cmd_skip(_, msg: Message):
     if not playing.get(msg.chat.id):
         await msg.reply_text("❌ مفيش أغنية شغالة!")
@@ -175,7 +198,7 @@ async def cmd_skip(_, msg: Message):
     await play_next(msg.chat.id)
 
 
-@bot.on_message(filters.command("stop") & filters.group)
+@bot.on_message(filters.command("stop"))
 async def cmd_stop(_, msg: Message):
     chat_id = msg.chat.id
     queues.pop(chat_id, None)
@@ -187,7 +210,7 @@ async def cmd_stop(_, msg: Message):
     await msg.reply_text("⏹️ تم الإيقاف!")
 
 
-@bot.on_message(filters.command("queue") & filters.group)
+@bot.on_message(filters.command("queue"))
 async def cmd_queue(_, msg: Message):
     chat_id = msg.chat.id
     queue   = get_queue(chat_id)
@@ -205,7 +228,7 @@ async def cmd_queue(_, msg: Message):
     await msg.reply_text("\n".join(lines))
 
 
-@bot.on_message(filters.command("volume") & filters.group)
+@bot.on_message(filters.command("volume"))
 async def cmd_volume(_, msg: Message):
     if len(msg.command) < 2 or not msg.command[1].isdigit():
         await msg.reply_text("❌ مثال: `/volume 80`")
@@ -218,7 +241,7 @@ async def cmd_volume(_, msg: Message):
         await msg.reply_text("❌ مش قادر أغير الصوت.")
 
 
-# ─── Stream End Handler (compatible with py-tgcalls 2.x) ───
+# ─── Stream End ───
 try:
     from pytgcalls import filters as tgfilters
 
@@ -226,19 +249,24 @@ try:
     async def stream_end_handler(_, update):
         await play_next(update.chat_id)
 
+    logger.info("✅ stream_end handler registered (v2.x)")
 except (ImportError, AttributeError):
     @call_py.on_stream_end()
     async def stream_end_handler(_, update):
         await play_next(update.chat_id)
 
+    logger.info("✅ stream_end handler registered (legacy)")
 
-# ─── تشغيل ───
+
 async def main():
-    print("🚀 بيشتغل...")
+    logger.info("🚀 بيشتغل...")
     await bot.start()
+    logger.info("✅ Bot started")
     await userbot.start()
+    logger.info("✅ Userbot started")
     await call_py.start()
-    print("✅ البوت جاهز!")
+    logger.info("✅ PyTgCalls started")
+    logger.info("✅ البوت جاهز!")
     await idle()
 
 if __name__ == "__main__":
