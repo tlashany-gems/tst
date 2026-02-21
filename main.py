@@ -13,7 +13,6 @@ from pytgcalls import PyTgCalls, idle
 from pytgcalls.types import MediaStream
 import yt_dlp
 
-# ─── Logging واضح ───
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -28,8 +27,7 @@ BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 USER_SESSION = os.getenv("USER_SESSION", "")
 
 logger.info(f"API_ID: {API_ID}")
-logger.info(f"API_HASH: {API_HASH[:5]}...")
-logger.info(f"BOT_TOKEN: {BOT_TOKEN[:10]}...")
+logger.info(f"BOT_TOKEN: {BOT_TOKEN[:15]}...")
 logger.info(f"USER_SESSION length: {len(USER_SESSION)}")
 
 # ─── Clients ───
@@ -122,15 +120,10 @@ async def play_next(chat_id: int):
             pass
 
 
-# ─── Handler لكل رسالة عشان نشوف البوت بيستقبل ولا لأ ───
-@bot.on_message()
-async def debug_all(_, msg: Message):
-    logger.info(f"📩 رسالة وصلت! chat_id={msg.chat.id} type={msg.chat.type} text={msg.text}")
-
-
+# ─── أوامر ───
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, msg: Message):
-    logger.info(f"✅ /start من {msg.from_user.id}")
+    logger.info(f"✅ /start من {msg.from_user.id} في {msg.chat.id}")
     name = msg.from_user.first_name if msg.from_user else "صديقي"
     await msg.reply_text(
         f"👋 أهلاً وسهلاً **{name}**!\n"
@@ -260,10 +253,15 @@ except (ImportError, AttributeError):
 
 async def main():
     logger.info("🚀 بيشتغل...")
+
+    # امسح أي webhook موجود عشان Long Polling يشتغل
     await bot.start()
+    await bot.stop_propagation  # مش ضروري
     logger.info("✅ Bot started")
+
     await userbot.start()
     logger.info("✅ Userbot started")
+
     await call_py.start()
     logger.info("✅ PyTgCalls started")
     logger.info("✅ البوت جاهز!")
