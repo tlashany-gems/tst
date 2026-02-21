@@ -20,16 +20,11 @@ API_ID           = int(os.getenv("API_ID", "0"))
 API_HASH         = os.getenv("API_HASH", "")
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
 USER_SESSION     = os.getenv("USER_SESSION", "")
-PYROGRAM_LICENSE = os.getenv("PYROGRAM_LICENSE", "")
 
 # ─── Clients ───
 bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-userbot_kwargs = dict(api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
-if PYROGRAM_LICENSE:
-    userbot_kwargs["pyrogram_license"] = PYROGRAM_LICENSE
-
-userbot = Client("userbot", **userbot_kwargs)
+userbot = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
 call_py = PyTgCalls(userbot)
 
 # ─── State ───
