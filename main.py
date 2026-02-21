@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls, idle
-from pytgcalls.types import MediaStream
+from pytgcalls import filters as fl
+from pytgcalls.types import MediaStream, Update
+from pytgcalls.types.stream import StreamAudioEnded, StreamVideoEnded
 import yt_dlp
 
 load_dotenv()
@@ -217,10 +219,11 @@ async def cmd_volume(_, msg: Message):
         await msg.reply_text("❌ مش قادر أغير الصوت.")
 
 
-# ─── Stream End ───
-@call_py.on_stream_end()
-async def on_stream_end(_, chat_id: int, __):
-    await play_next(chat_id)
+# ─── Stream End (py-tgcalls v2.x API) ───
+@call_py.on_update(fl.stream_end)
+async def on_stream_end(_, update: Update):
+    if isinstance(update, (StreamAudioEnded, StreamVideoEnded)):
+        await play_next(update.chat_id)
 
 
 # ─── تشغيل ───
