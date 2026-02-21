@@ -10,17 +10,19 @@ from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped, AudioParameters
+from pytgcalls.types import Update
+from pytgcalls.types.input_stream import AudioPiped
+from pytgcalls.types.input_stream.quality import HighQualityAudio
 import yt_dlp
 
 load_dotenv()
 
-# ─── إعدادات (بتيجي من Railway Variables) ───
-API_ID            = int(os.getenv("API_ID", "0"))
-API_HASH          = os.getenv("API_HASH", "")
-BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
-USER_SESSION      = os.getenv("USER_SESSION", "")
-PYROGRAM_LICENSE  = os.getenv("PYROGRAM_LICENSE", "")
+# ─── إعدادات (من Railway Variables) ───
+API_ID           = int(os.getenv("API_ID", "0"))
+API_HASH         = os.getenv("API_HASH", "")
+BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
+USER_SESSION     = os.getenv("USER_SESSION", "")
+PYROGRAM_LICENSE = os.getenv("PYROGRAM_LICENSE", "")
 
 # ─── Clients ───
 bot = Client(
@@ -30,26 +32,26 @@ bot = Client(
     bot_token=BOT_TOKEN,
 )
 
-# الـ Userbot بيستخدم الـ Pyrogram License
-userbot = Client(
-    "userbot",
+userbot_kwargs = dict(
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=USER_SESSION,
-    pyrogram_license=PYROGRAM_LICENSE,
 )
+if PYROGRAM_LICENSE:
+    userbot_kwargs["pyrogram_license"] = PYROGRAM_LICENSE
 
+userbot = Client("userbot", **userbot_kwargs)
 call_py = PyTgCalls(userbot)
 
 # ─── State ───
-queues:  dict[int, deque] = {}
-playing: dict[int, dict]  = {}
+queues:  dict[int, list] = {}
+playing: dict[int, dict] = {}
 
 
-# ─── دوال مساعدة ───
-def get_queue(chat_id: int) -> deque:
+# ─── Helpers ───
+def get_queue(chat_id: int) -> list:
     if chat_id not in queues:
-        queues[chat_id] = deque()
+        queues[chat_id] = []
     return queues[chat_id]
 
 
@@ -68,6 +70,7 @@ def search_song(query: str) -> dict | None:
             info = ydl.extract_info(query, download=False)
             if "entries" in info:
                 info = info["entries"][0]
+            # جيب أفضل audio-only stream
             stream_url = None
             for fmt in reversed(info.get("formats", [])):
                 if fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
@@ -87,30 +90,27 @@ def search_song(query: str) -> dict | None:
 
 
 def fmt_duration(seconds: int) -> str:
-    m, s = divmod(seconds, 60)
+    if not seconds:
+        return "?"
+    m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
 
 
-# ─── منطق التشغيل ───
+# ─── تشغيل ───
 async def play_track(chat_id: int, track: dict):
     playing[chat_id] = track
+    stream = AudioPiped(track["url"], HighQualityAudio())
     try:
-        await call_py.change_stream(
-            chat_id,
-            AudioPiped(track["url"], AudioParameters(bitrate=128)),
-        )
+        await call_py.change_stream(chat_id, stream)
     except Exception:
-        await call_py.join_group_call(
-            chat_id,
-            AudioPiped(track["url"], AudioParameters(bitrate=128)),
-        )
+        await call_py.join_group_call(chat_id, stream)
 
 
 async def play_next(chat_id: int):
     queue = get_queue(chat_id)
     if queue:
-        await play_track(chat_id, queue.popleft())
+        await play_track(chat_id, queue.pop(0))
     else:
         playing.pop(chat_id, None)
         try:
@@ -119,17 +119,17 @@ async def play_next(chat_id: int):
             pass
 
 
-# ─── أوامر البوت ───
+# ─── أوامر ───
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, msg: Message):
     await msg.reply_text(
         "🎵 **Music Bot — Stream مباشر**\n\n"
-        "▶️ `/play <اسم الأغنية>` — شغّل أغنية\n"
+        "▶️ `/play <اسم الأغنية>` — شغّل\n"
+        "🎵 `/now` — الأغنية الحالية\n"
         "⏭️ `/skip` — تخطي\n"
         "⏹️ `/stop` — وقف\n"
-        "📋 `/queue` — قائمة الانتظار\n"
-        "🎚️ `/volume <1-200>` — الصوت\n"
-        "🎵 `/now` — الأغنية الحالية"
+        "📋 `/queue` — القائمة\n"
+        "🔊 `/volume <1-200>` — الصوت"
     )
 
 
@@ -138,22 +138,33 @@ async def cmd_play(_, msg: Message):
     if len(msg.command) < 2:
         await msg.reply_text("❌ اكتب اسم الأغنية!\nمثال: `/play Fairuz`")
         return
+
     query   = " ".join(msg.command[1:])
     chat_id = msg.chat.id
     status  = await msg.reply_text(f"🔍 بدور على: **{query}**...")
-    track   = await asyncio.get_event_loop().run_in_executor(None, search_song, query)
+
+    track = await asyncio.get_event_loop().run_in_executor(None, search_song, query)
+
     if not track:
         await status.edit_text("❌ مش لاقي الأغنية دي، جرب اسم تاني!")
         return
-    dur = fmt_duration(track["duration"]) if track["duration"] else "?"
+
+    dur = fmt_duration(track["duration"])
+
     if playing.get(chat_id):
         get_queue(chat_id).append(track)
         pos = len(get_queue(chat_id))
         await status.edit_text(
-            f"✅ **اتضافت للقائمة:**\n🎵 {track['title']}\n⏱️ {dur}  |  📋 #{pos}"
+            f"✅ **اتضافت للقائمة:**\n"
+            f"🎵 {track['title']}\n"
+            f"⏱️ {dur}  |  📋 #{pos}"
         )
     else:
-        await status.edit_text(f"▶️ **بيشغل:**\n🎵 {track['title']}\n⏱️ {dur}")
+        await status.edit_text(
+            f"▶️ **بيشغل:**\n"
+            f"🎵 {track['title']}\n"
+            f"⏱️ {dur}"
+        )
         await play_track(chat_id, track)
 
 
@@ -163,9 +174,10 @@ async def cmd_now(_, msg: Message):
     if not track:
         await msg.reply_text("😶 مفيش أغنية شغالة دلوقتي.")
         return
-    dur = fmt_duration(track["duration"]) if track["duration"] else "?"
     await msg.reply_text(
-        f"▶️ **شغال دلوقتي:**\n🎵 [{track['title']}]({track['webpage']})\n⏱️ {dur}",
+        f"▶️ **شغال دلوقتي:**\n"
+        f"🎵 [{track['title']}]({track['webpage']})\n"
+        f"⏱️ {fmt_duration(track['duration'])}",
         disable_web_page_preview=True,
     )
 
@@ -196,17 +208,19 @@ async def cmd_queue(_, msg: Message):
     chat_id = msg.chat.id
     queue   = get_queue(chat_id)
     current = playing.get(chat_id)
+
     if not current and not queue:
         await msg.reply_text("📋 القائمة فاضية!")
         return
+
     lines = ["📋 **قائمة الانتظار:**\n"]
     if current:
         lines.append(f"▶️ **{current['title']}** ← شغال دلوقتي\n")
     for i, t in enumerate(queue, 1):
-        dur = fmt_duration(t["duration"]) if t["duration"] else "?"
-        lines.append(f"`{i}.` {t['title']} — ⏱️ {dur}")
+        lines.append(f"`{i}.` {t['title']} — ⏱️ {fmt_duration(t['duration'])}")
     if not queue:
         lines.append("_مفيش أغاني جاية_")
+
     await msg.reply_text("\n".join(lines))
 
 
@@ -223,9 +237,9 @@ async def cmd_volume(_, msg: Message):
         await msg.reply_text("❌ مش قادر أغير الصوت دلوقتي.")
 
 
-# ─── Events ───
+# ─── Stream End Event ───
 @call_py.on_stream_end()
-async def on_stream_end(_, update):
+async def on_stream_end(_, update: Update):
     await play_next(update.chat_id)
 
 
