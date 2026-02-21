@@ -1,17 +1,17 @@
 """
 ╔══════════════════════════════════════════════╗
 ║        تيلثون تـلـاشـاني - بوت الموسيقى      ║
-║         Telethon TALASHNY Music Bot v4       ║
+║         Telethon TALASHNY Music Bot v5       ║
 ╚══════════════════════════════════════════════╝
-pytgcalls==2.1.0  |  pyrogram==2.0.106
+pytgcalls==0.0.24  |  pyrogram==2.0.106
 """
 
 import os, asyncio, logging, glob, re
 
 from pyrogram import Client as PyroClient
-from pytgcalls import PyTgCalls
+from pytgcalls import PyTgCalls, GroupCallAction
+from pytgcalls.types import InputAudioStream
 from pytgcalls.types.input_stream import AudioPiped
-from pytgcalls.types.input_stream.quality import HighQualityAudio
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -113,18 +113,15 @@ def get_player(chat_id: int) -> dict:
                                   "loop": False, "history": []}
     return music_players[chat_id]
 
-def make_stream(file_path: str):
-    return AudioPiped(file_path, HighQualityAudio())
-
 # ══════════════════════════════════════════════════
-# الحساب المساعد
+# الحساب المساعد — pytgcalls 0.0.24
 # ══════════════════════════════════════════════════
 pyro_client: PyroClient = None
-pytgcalls:   PyTgCalls  = None
+pytgcalls_client: PyTgCalls = None
 bot_app = None
 
 async def setup_assistant():
-    global pyro_client, pytgcalls
+    global pyro_client, pytgcalls_client
 
     pyro_client = PyroClient(
         name="assistant",
@@ -133,15 +130,19 @@ async def setup_assistant():
         session_string=SESSION_STRING,
         no_updates=True
     )
-    pytgcalls = PyTgCalls(pyro_client)
 
-    @pytgcalls.on_stream_end()
+    pytgcalls_client = PyTgCalls(pyro_client)
+
+    @pytgcalls_client.on_stream_end()
     async def on_stream_end(client, update):
         cid    = update.chat_id
         player = get_player(cid)
 
         if player["loop"] and player["current"]:
-            try: await pytgcalls.change_stream(cid, make_stream(player["current"]["file"]))
+            try:
+                await pytgcalls_client.change_stream(
+                    cid, AudioPiped(player["current"]["file"])
+                )
             except Exception as e: logger.error(f"loop: {e}")
             return
 
@@ -154,7 +155,7 @@ async def setup_assistant():
             nxt = player["queue"][0]
             player["current"] = nxt
             try:
-                await pytgcalls.change_stream(cid, make_stream(nxt["file"]))
+                await pytgcalls_client.change_stream(cid, AudioPiped(nxt["file"]))
                 if bot_app:
                     await bot_app.bot.send_message(
                         cid,
@@ -167,13 +168,13 @@ async def setup_assistant():
         else:
             player["current"] = None
             try:
-                await pytgcalls.leave_group_call(cid)
+                await pytgcalls_client.leave_group_call(cid)
                 cleanup_downloads(cid)
                 if bot_app: await bot_app.bot.send_message(cid, "⏹ خلصت القايمة!")
             except: pass
 
     await pyro_client.start()
-    await pytgcalls.start()
+    await pytgcalls_client.start()
     me = await pyro_client.get_me()
     logger.info(f"✅ الحساب المساعد: {me.first_name} (@{me.username})")
     print(f"✅ الحساب المساعد: {me.first_name} (@{me.username})")
@@ -232,7 +233,6 @@ async def cmd_play(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await u.message.reply_text("🔍 جاري البحث...")
     try:
         is_url = "youtube.com" in query or "youtu.be" in query
-        url, title, dur = (await get_video_info(query) and (query, *await get_video_info(query))) if is_url else await search_youtube(query)
         if is_url:
             title, dur = await get_video_info(query)
             url = query
@@ -250,11 +250,14 @@ async def cmd_play(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
             player["queue"].append(track)
             player["current"] = track
             try:
-                await pytgcalls.join_group_call(chat_id, make_stream(file_path))
+                await pytgcalls_client.join_group_call(chat_id, AudioPiped(file_path))
             except Exception:
-                try: await pytgcalls.change_stream(chat_id, make_stream(file_path))
+                try: await pytgcalls_client.change_stream(chat_id, AudioPiped(file_path))
                 except Exception as e2:
-                    await msg.edit_text(f"❌ فشل التشغيل: {e2}\nافتح الدردشة الصوتية أو استخدم /vcstart")
+                    await msg.edit_text(
+                        f"❌ فشل التشغيل: {e2}\n"
+                        "افتح الدردشة الصوتية أو استخدم /vcstart"
+                    )
                     return
             await msg.edit_text(
                 f"🎵 *بيشتغل دلوقتي:*\n━━━━━━━━━━━━━━━\n"
@@ -276,13 +279,13 @@ async def cmd_play(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_pause(u: Update, _):
     try:
-        await pytgcalls.pause_stream(u.effective_chat.id)
+        await pytgcalls_client.pause_stream(u.effective_chat.id)
         await u.message.reply_text("⏸ تم الإيقاف المؤقت", reply_markup=_paused_kb())
     except Exception as e: await u.message.reply_text(f"❌ {e}")
 
 async def cmd_resume(u: Update, _):
     try:
-        await pytgcalls.resume_stream(u.effective_chat.id)
+        await pytgcalls_client.resume_stream(u.effective_chat.id)
         await u.message.reply_text("▶️ تم الاستئناف", reply_markup=_now_kb())
     except Exception as e: await u.message.reply_text(f"❌ {e}")
 
@@ -294,14 +297,14 @@ async def cmd_skip(u: Update, _):
         if player["queue"]:   player["queue"].pop(0)
         if player["queue"]:
             nxt = player["queue"][0]; player["current"] = nxt
-            await pytgcalls.change_stream(chat_id, make_stream(nxt["file"]))
+            await pytgcalls_client.change_stream(chat_id, AudioPiped(nxt["file"]))
             await u.message.reply_text(
                 f"⏭ *تم التخطي!*\n🎧 {nxt['title']}\n⏱ {nxt['duration']}\n📋 باقي: {len(player['queue'])}",
                 parse_mode="Markdown", reply_markup=_now_kb()
             )
         else:
             player["current"] = None
-            await pytgcalls.leave_group_call(chat_id)
+            await pytgcalls_client.leave_group_call(chat_id)
             cleanup_downloads(chat_id)
             await u.message.reply_text("⏹ خلصت القايمة!")
     except Exception as e: await u.message.reply_text(f"❌ {e}")
@@ -315,7 +318,7 @@ async def cmd_prev(u: Update, _):
     if player["current"]: player["queue"].insert(0, player["current"])
     player["queue"].insert(0, prev); player["current"] = prev
     try:
-        await pytgcalls.change_stream(chat_id, make_stream(prev["file"]))
+        await pytgcalls_client.change_stream(chat_id, AudioPiped(prev["file"]))
         await u.message.reply_text(
             f"⏮ *رجعنا للسابقة!*\n🎧 {prev['title']}\n⏱ {prev['duration']}",
             parse_mode="Markdown", reply_markup=_now_kb()
@@ -326,7 +329,7 @@ async def cmd_stop(u: Update, _):
     chat_id = u.effective_chat.id
     player  = get_player(chat_id)
     try:
-        await pytgcalls.leave_group_call(chat_id)
+        await pytgcalls_client.leave_group_call(chat_id)
         player["queue"].clear(); player["current"] = None; player["history"].clear()
         cleanup_downloads(chat_id)
         await u.message.reply_text("⏹ تم إيقاف الموسيقى!")
@@ -367,10 +370,9 @@ async def cmd_vcstart(u: Update, _):
         os.system("ffmpeg -f lavfi -i anullsrc=r=48000:cl=stereo "
                   "-t 3 -q:a 9 -acodec libmp3lame silent.mp3 -y -loglevel quiet")
     try:
-        await pytgcalls.join_group_call(chat_id, make_stream(silent))
+        await pytgcalls_client.join_group_call(chat_id, AudioPiped(silent))
         await u.message.reply_text(
-            "🎙 *تم فتح الدردشة الصوتية!*\n"
-            "استخدم `/play` لتشغيل أغنية",
+            "🎙 *تم فتح الدردشة الصوتية!*\nاستخدم `/play` لتشغيل أغنية",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -380,7 +382,7 @@ async def cmd_vcend(u: Update, _):
     chat_id = u.effective_chat.id
     player  = get_player(chat_id)
     try:
-        await pytgcalls.leave_group_call(chat_id)
+        await pytgcalls_client.leave_group_call(chat_id)
         player["queue"].clear(); player["current"] = None
         cleanup_downloads(chat_id)
         await u.message.reply_text("📴 تم إغلاق الدردشة الصوتية!")
@@ -390,20 +392,18 @@ async def cmd_help(u: Update, _):
     await u.message.reply_text(
         "📌 *كل أوامر تيلثون تـلـاشـاني* 📌\n"
         "═══════════════════\n"
-        "🎵 *الموسيقى:*\n"
-        "  `/play <اسم/رابط>` — شغّل أو أضف للقايمة\n"
-        "  `/pause` ⏸ — وقّف مؤقتاً\n"
-        "  `/resume` ▶️ — كمّل\n"
-        "  `/skip` أو `/next` ⏭ — التالية\n"
-        "  `/prev` ⏮ — السابقة\n"
-        "  `/stop` ⏹ — وقّف كل شيء\n"
-        "  `/queue` أو `/q` 📋 — القايمة\n"
-        "  `/now` أو `/np` 🎵 — الحالية\n"
-        "  `/loop` 🔁 — تكرار\n"
+        "🎵 `/play <اسم/رابط>` — شغّل أو أضف للقايمة\n"
+        "⏸ `/pause` — وقّف مؤقتاً\n"
+        "▶️ `/resume` — كمّل\n"
+        "⏭ `/skip` أو `/next` — التالية\n"
+        "⏮ `/prev` — السابقة\n"
+        "⏹ `/stop` — وقّف كل شيء\n"
+        "📋 `/queue` أو `/q` — القايمة\n"
+        "🎵 `/now` أو `/np` — الحالية\n"
+        "🔁 `/loop` — تكرار\n"
         "═══════════════════\n"
-        "🎙 *الدردشة الصوتية:*\n"
-        "  `/vcstart` — افتح\n"
-        "  `/vcend` — اقفل\n"
+        "🎙 `/vcstart` — افتح الدردشة الصوتية\n"
+        "📴 `/vcend` — اقفل الدردشة الصوتية\n"
         "═══════════════════\n"
         "💡 الأزرار تحت رسالة الأغنية للتحكم السريع!",
         parse_mode="Markdown"
@@ -421,13 +421,13 @@ async def button_handler(u: Update, _):
 
     if data == "pause":
         try:
-            await pytgcalls.pause_stream(chat_id)
+            await pytgcalls_client.pause_stream(chat_id)
             await q.edit_message_reply_markup(_paused_kb())
         except Exception as e: await q.answer(f"❌ {e}", show_alert=True)
 
     elif data == "resume":
         try:
-            await pytgcalls.resume_stream(chat_id)
+            await pytgcalls_client.resume_stream(chat_id)
             await q.edit_message_reply_markup(_now_kb())
         except Exception as e: await q.answer(f"❌ {e}", show_alert=True)
 
@@ -437,7 +437,7 @@ async def button_handler(u: Update, _):
         if player["queue"]:
             nxt = player["queue"][0]; player["current"] = nxt
             try:
-                await pytgcalls.change_stream(chat_id, make_stream(nxt["file"]))
+                await pytgcalls_client.change_stream(chat_id, AudioPiped(nxt["file"]))
                 await q.edit_message_text(
                     f"🎵 *بيشتغل دلوقتي:*\n━━━━━━━━━━━━━━━\n"
                     f"🎧 {nxt['title']}\n⏱ {nxt['duration']}\n📋 باقي: {len(player['queue'])}",
@@ -447,7 +447,7 @@ async def button_handler(u: Update, _):
         else:
             player["current"] = None
             try:
-                await pytgcalls.leave_group_call(chat_id)
+                await pytgcalls_client.leave_group_call(chat_id)
                 cleanup_downloads(chat_id)
                 await q.edit_message_text("⏹ خلصت القايمة!")
             except: pass
@@ -459,7 +459,7 @@ async def button_handler(u: Update, _):
         if player["current"]: player["queue"].insert(0, player["current"])
         player["queue"].insert(0, prev); player["current"] = prev
         try:
-            await pytgcalls.change_stream(chat_id, make_stream(prev["file"]))
+            await pytgcalls_client.change_stream(chat_id, AudioPiped(prev["file"]))
             await q.edit_message_text(
                 f"⏮ *رجعنا للسابقة!*\n🎧 {prev['title']}\n⏱ {prev['duration']}",
                 parse_mode="Markdown", reply_markup=_now_kb()
@@ -468,7 +468,7 @@ async def button_handler(u: Update, _):
 
     elif data == "stop":
         try:
-            await pytgcalls.leave_group_call(chat_id)
+            await pytgcalls_client.leave_group_call(chat_id)
             player["queue"].clear(); player["current"] = None; player["history"].clear()
             cleanup_downloads(chat_id)
             await q.edit_message_text("⏹ تم إيقاف الموسيقى!")
@@ -504,7 +504,7 @@ async def post_init(app):
 
 def main():
     print("╔══════════════════════════════════════╗")
-    print("║   تيلثون تـلـاشـاني - Music Bot v4   ║")
+    print("║   تيلثون تـلـاشـاني - Music Bot v5   ║")
     print("╚══════════════════════════════════════╝\n")
 
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
