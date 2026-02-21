@@ -1,6 +1,6 @@
 """
 🎵 Telegram Voice Chat Music Bot
-py-tgcalls (latest) + pyrogram v2.0.106
+py-tgcalls + pyrofork (متوافقين 100%)
 """
 
 import asyncio
@@ -16,15 +16,26 @@ import yt_dlp
 load_dotenv()
 
 # ─── إعدادات (من Railway Variables) ───
-API_ID           = int(os.getenv("API_ID", "0"))
-API_HASH         = os.getenv("API_HASH", "")
-BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
-USER_SESSION     = os.getenv("USER_SESSION", "")
+API_ID       = int(os.getenv("API_ID", "0"))
+API_HASH     = os.getenv("API_HASH", "")
+BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
+USER_SESSION = os.getenv("USER_SESSION", "")
 
 # ─── Clients ───
-bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+bot = Client(
+    "music_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+)
 
-userbot = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
+userbot = Client(
+    "userbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=USER_SESSION,
+)
+
 call_py = PyTgCalls(userbot)
 
 # ─── State ───
