@@ -7,9 +7,9 @@ import os
 import re
 import logging
 from dotenv import load_dotenv
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message
-from pytgcalls import PyTgCalls, idle
+from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 import yt_dlp
 
@@ -131,7 +131,7 @@ async def cmd_play(_, msg: Message):
     query = " ".join(msg.command[1:])
     chat_id = msg.chat.id
     status = await msg.reply_text(f"🔍 بدور على: **{query}**...")
-    track = await asyncio.get_event_loop().run_in_executor(None, search_song, query)
+    track = await asyncio.get_running_loop().run_in_executor(None, search_song, query)
     if not track:
         await status.edit_text("❌ مش لاقيها، جرب اسم تاني!")
         return
@@ -230,7 +230,7 @@ async def main():
     logger.info("✅ Userbot started")
     await call_py.start()
     logger.info("✅ PyTgCalls started — البوت جاهز!")
-    await idle()
+    await idle()  # من pyrogram — بيخلي الاتنين يشتغلوا صح
 
 if __name__ == "__main__":
     asyncio.run(main())
