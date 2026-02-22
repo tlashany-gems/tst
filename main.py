@@ -91,8 +91,29 @@ def fmt_duration(seconds):
     return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
 
 
+async def ensure_userbot_in_chat(chat_id):
+    """
+    ✅ الإصلاح الرئيسي: يضمن إن الـ userbot موجود في الجروب قبل ما يبدأ يبث
+    الـ userbot مش محتاج يكون Admin — بس لازم يكون عضو في الجروب
+    """
+    try:
+        await userbot.get_chat_member(chat_id, "me")
+        logger.info(f"✅ Userbot already in chat {chat_id}")
+    except Exception:
+        try:
+            # لو مش موجود، يطلب من البوت يضيفه
+            invite = await bot.export_chat_invite_link(chat_id)
+            await userbot.join_chat(invite)
+            logger.info(f"✅ Userbot joined chat {chat_id} via invite link")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not auto-join userbot: {e}")
+            # مش هيوقف البوت، هيحاول يكمل
+
+
 async def play_in_vc(chat_id, track):
     playing[chat_id] = track
+    # ✅ تأكد إن الـ userbot في الجروب أولاً
+    await ensure_userbot_in_chat(chat_id)
     stream = MediaStream(track["url"], video_flags=MediaStream.Flags.IGNORE)
     await call_py.play(chat_id, stream)
     logger.info(f"✅ playing in VC: {track['title']}")
@@ -138,6 +159,7 @@ async def cmd_play(_, msg: Message):
     try:
         track = await asyncio.get_running_loop().run_in_executor(None, search_song, query)
     except Exception as e:
+        logger.error(f"Search error: {e}")
         await status.edit_text("❌ حصل error، جرب تاني!")
         return
     if not track:
@@ -154,10 +176,17 @@ async def cmd_play(_, msg: Message):
         await play_in_vc(chat_id, track)
     except Exception as e:
         logger.error(f"VC error: {e}")
+        # ✅ رسالة خطأ أوضح مع سبب المشكلة
+        err_msg = str(e)
+        hint = ""
+        if "not participant" in err_msg.lower() or "user not participant" in err_msg.lower():
+            hint = "\n\n💡 الحل: أضف الحساب المساعد للجروب يدوياً أو تأكد إنه عضو"
+        elif "forbidden" in err_msg.lower():
+            hint = "\n\n💡 الحل: غيّر إعدادات الجروب وسمح لكل الأعضاء بالبث في الـ VC"
         await status.edit_text(
             f"⚠️ لاقيت الأغنية بس مش قادر يشغلها!\n"
             f"🎵 {track['title']}\n🔗 {track['webpage']}\n\n"
-            f"Error: {str(e)[:100]}"
+            f"Error: {err_msg[:150]}{hint}"
         )
 
 
