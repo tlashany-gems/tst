@@ -1,4 +1,3 @@
-python-telegram-bot==21.0.1
 pyrofork==2.3.69
 TgCrypto
 py-tgcalls==2.2.11
