@@ -27,7 +27,7 @@ logger.info(f"API_ID: {API_ID}")
 logger.info(f"BOT_TOKEN: {BOT_TOKEN[:15]}...")
 logger.info(f"USER_SESSION length: {len(USER_SESSION)}")
 
-bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, sleep_threshold=60)
 userbot = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
 call_py = PyTgCalls(userbot)
 
