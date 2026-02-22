@@ -22,49 +22,61 @@ playing: dict[int, dict] = {}
 
 
 def search_song(query):
+    # جرب YouTube أول، لو فشل جرب SoundCloud
+    is_url = re.match(r"https?://", query)
+    
+    searches = []
+    if is_url:
+        searches = [query]
+    else:
+        searches = [
+            f"scsearch1:{query}",   # SoundCloud أول
+            f"ytsearch1:{query}",   # YouTube تاني
+        ]
+
     ydl_opts = {
         "format": "bestaudio/best",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
-        "cookiefile": None,
-        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
+        "socket_timeout": 15,
         "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         },
     }
-    # لو مش رابط، ابحث على YouTube
-    if not re.match(r"https?://", query):
-        query = f"ytsearch:{query}"
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=False)
-            if "entries" in info:
-                # خد أول نتيجة
-                entries = [e for e in info["entries"] if e]
-                if not entries:
-                    return None
-                info = entries[0]
-            # جيب أفضل audio URL
-            stream_url = None
-            for fmt in reversed(info.get("formats", [])):
-                if fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
-                    stream_url = fmt.get("url")
-                    break
-            if not stream_url:
-                stream_url = info.get("url")
-            if not stream_url:
-                return None
-            return {
-                "title": info.get("title", "Unknown"),
-                "url": stream_url,
-                "duration": info.get("duration", 0),
-                "webpage": info.get("webpage_url", ""),
-            }
-    except Exception as e:
-        logger.error(f"search error: {e}")
-        return None
+
+    for search in searches:
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(search, download=False)
+                if not info:
+                    continue
+                if "entries" in info:
+                    entries = [e for e in info["entries"] if e]
+                    if not entries:
+                        continue
+                    info = entries[0]
+                stream_url = None
+                for fmt in reversed(info.get("formats", [])):
+                    if fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
+                        stream_url = fmt.get("url")
+                        break
+                if not stream_url:
+                    stream_url = info.get("url")
+                if not stream_url:
+                    continue
+                return {
+                    "title": info.get("title", "Unknown"),
+                    "url": stream_url,
+                    "duration": info.get("duration", 0),
+                    "webpage": info.get("webpage_url", ""),
+                    "source": info.get("extractor", ""),
+                }
+        except Exception as e:
+            logger.warning(f"search failed for '{search}': {e}")
+            continue
+    return None
 
 
 def fmt_duration(seconds):
@@ -83,8 +95,10 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "▶️ /play <اسم أو رابط> — شغّل\n"
         "⏹️ /stop — وقف\n"
         "📋 /queue — القائمة\n"
-        "⏭️ /skip — تخطي\n\n"
-        "💡 مثال: /play Fairuz"
+        "⏭️ /skip — تخطي\n"
+        "🎵 /now — الشغال دلوقتي\n\n"
+        "💡 مثال: /play Fairuz\n"
+        "💡 أو: /play https://soundcloud.com/..."
     )
 
 
@@ -104,10 +118,17 @@ async def play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if not track:
-        await msg.edit_text("❌ مش لاقيها، جرب اسم أو رابط YouTube مباشر!")
+        await msg.edit_text(
+            "❌ مش قادر يجيب الأغنية دي!\n\n"
+            "جرب:\n"
+            "• اسم الأغنية بالعربي أو الإنجليزي\n"
+            "• رابط SoundCloud مباشر"
+        )
         return
 
     dur = fmt_duration(track["duration"])
+    source_emoji = "🎵" if "soundcloud" in track.get("source","").lower() else "▶️"
+
     if playing.get(chat_id):
         queues.setdefault(chat_id, []).append(track)
         pos = len(queues[chat_id])
@@ -115,12 +136,12 @@ async def play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         playing[chat_id] = track
         await msg.edit_text(
-            f"▶️ بيشغل:\n🎵 {track['title']}\n⏱️ {dur}\n\n"
-            f"🔗 [استمع هنا]({track['webpage']})",
-            parse_mode="Markdown",
-            disable_web_page_preview=True,
+            f"{source_emoji} بيشغل:\n"
+            f"🎵 {track['title']}\n"
+            f"⏱️ {dur}\n\n"
+            f"🔗 {track['webpage']}",
         )
-        logger.info(f"Now playing: {track['title']}")
+        logger.info(f"Now playing: {track['title']} ({track['source']})")
 
 
 async def stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -167,7 +188,9 @@ async def now(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("😶 مفيش أغنية شغالة.")
         return
     await update.message.reply_text(
-        f"▶️ شغال دلوقتي:\n🎵 {track['title']}\n⏱️ {fmt_duration(track['duration'])}\n🔗 {track['webpage']}"
+        f"▶️ شغال دلوقتي:\n🎵 {track['title']}\n"
+        f"⏱️ {fmt_duration(track['duration'])}\n"
+        f"🔗 {track['webpage']}"
     )
 
 
