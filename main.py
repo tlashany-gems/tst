@@ -1,22 +1,19 @@
 """
-🎵 Telegram Music Bot - Bot API + PyTgCalls Voice Chat
+🎵 Telegram Music Bot - Bot API + PyTgCalls
 """
 
 import asyncio
 import os
 import re
 import logging
-import threading
 from dotenv import load_dotenv
 
-# Bot API
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-
-# Userbot + Voice Chat
 from pyrogram import Client, idle
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
+
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 import yt_dlp
 
@@ -30,9 +27,8 @@ API_ID       = int(os.getenv("API_ID", "0"))
 API_HASH     = os.getenv("API_HASH", "")
 USER_SESSION = os.getenv("USER_SESSION", "")
 
-# Userbot للـ Voice Chat
-userbot  = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
-call_py  = PyTgCalls(userbot)
+userbot = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
+call_py = PyTgCalls(userbot)
 
 queues:  dict[int, list] = {}
 playing: dict[int, dict] = {}
@@ -57,7 +53,6 @@ def search_song(query):
     }
     is_url = re.match(r"https?://", query)
     searches = [query] if is_url else [f"scsearch1:{query}", f"ytsearch1:{query}"]
-
     for search in searches:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -98,19 +93,12 @@ def fmt_duration(seconds):
 
 
 async def play_in_vc(chat_id, track):
-    """شغل الأغنية في الـ Voice Chat"""
     playing[chat_id] = track
     stream = MediaStream(track["url"])
     try:
         await call_py.change_stream(chat_id, stream)
-        logger.info(f"Changed stream: {track['title']}")
     except Exception:
-        try:
-            await call_py.play(chat_id, stream)
-            logger.info(f"Started playing: {track['title']}")
-        except Exception as e:
-            logger.error(f"Voice chat error: {e}")
-            raise
+        await call_py.play(chat_id, stream)
 
 
 async def play_next(chat_id):
@@ -125,7 +113,7 @@ async def play_next(chat_id):
             pass
 
 
-# ===== BOT HANDLERS =====
+# ===== HANDLERS =====
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "صديقي"
@@ -148,34 +136,29 @@ async def play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = " ".join(ctx.args)
     chat_id = update.effective_chat.id
     msg = await update.message.reply_text(f"🔍 بدور على: {query}...")
-
     try:
         track = await asyncio.get_running_loop().run_in_executor(None, search_song, query)
     except Exception as e:
         await msg.edit_text("❌ حصل error، جرب تاني!")
         return
-
     if not track:
         await msg.edit_text("❌ مش لاقيها، جرب اسم تاني!")
         return
-
     dur = fmt_duration(track["duration"])
-
     if playing.get(chat_id):
         get_queue(chat_id).append(track)
         pos = len(get_queue(chat_id))
         await msg.edit_text(f"✅ اتضافت للقائمة #{pos}:\n🎵 {track['title']}\n⏱️ {dur}")
         return
-
-    await msg.edit_text(f"▶️ بيشغل في الدردشة الصوتية:\n🎵 {track['title']}\n⏱️ {dur}")
+    await msg.edit_text(f"▶️ بيشغل:\n🎵 {track['title']}\n⏱️ {dur}")
     try:
         await play_in_vc(chat_id, track)
     except Exception as e:
+        logger.error(f"VC error: {e}")
         await msg.edit_text(
-            f"⚠️ لاقيت الأغنية بس مش قادر يشغلها في الـ Voice Chat!\n\n"
-            f"🎵 {track['title']}\n"
-            f"🔗 {track['webpage']}\n\n"
-            "تأكد إن الحساب المساعد admin في الجروب والـ Voice Chat شغال."
+            f"⚠️ لاقيت الأغنية بس مش قادر يشغلها في الـ Voice Chat!\n"
+            f"🎵 {track['title']}\n🔗 {track['webpage']}\n\n"
+            "تأكد إن الـ Voice Chat شغال والحساب المساعد Admin."
         )
 
 
@@ -220,7 +203,8 @@ async def now(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("😶 مفيش أغنية شغالة.")
         return
     await update.message.reply_text(
-        f"▶️ شغال دلوقتي:\n🎵 {track['title']}\n⏱️ {fmt_duration(track['duration'])}\n🔗 {track['webpage']}"
+        f"▶️ شغال دلوقتي:\n🎵 {track['title']}\n"
+        f"⏱️ {fmt_duration(track['duration'])}\n🔗 {track['webpage']}"
     )
 
 
@@ -235,15 +219,16 @@ except Exception:
 
 
 # ===== MAIN =====
-async def start_userbot():
+async def main():
+    logger.info("🚀 Starting...")
+
+    # ابدأ userbot
     await userbot.start()
     logger.info("✅ Userbot started")
     await call_py.start()
     logger.info("✅ PyTgCalls started")
 
-
-def run_bot():
-    """شغّل الـ Bot API في thread منفصل"""
+    # ابدأ البوت في نفس الـ event loop
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play))
@@ -251,18 +236,19 @@ def run_bot():
     app.add_handler(CommandHandler("skip", skip))
     app.add_handler(CommandHandler("queue", queue_cmd))
     app.add_handler(CommandHandler("now", now))
-    logger.info("✅ Bot polling started!")
-    app.run_polling(drop_pending_updates=True)
 
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    logger.info("✅ Bot polling started! البوت جاهز 🎵")
 
-async def main():
-    logger.info("🚀 Starting...")
-    await start_userbot()
-    # شغّل البوت في thread منفصل
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    logger.info("✅ All systems go! البوت جاهز 🎵")
+    # استنى للأبد
     await idle()
+
+    # cleanup
+    await app.updater.stop()
+    await app.stop()
+    await app.shutdown()
 
 
 if __name__ == "__main__":
