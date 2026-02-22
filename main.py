@@ -224,7 +224,23 @@ except Exception:
 
 
 # ===== MAIN =====
+async def install_ffmpeg():
+    """تثبيت ffmpeg لو مش موجود"""
+    import subprocess, shutil
+    if shutil.which("ffmpeg"):
+        logger.info("✅ ffmpeg already installed")
+        return
+    logger.info("📦 Installing ffmpeg...")
+    try:
+        subprocess.run(["apt-get", "update", "-qq"], check=True, capture_output=True)
+        subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg"], check=True, capture_output=True)
+        logger.info("✅ ffmpeg installed successfully")
+    except Exception as e:
+        logger.error(f"❌ ffmpeg install failed: {e}")
+
+
 async def main():
+    await install_ffmpeg()
     logger.info("🚀 Starting...")
 
     # ابدأ userbot
