@@ -256,7 +256,6 @@ async def main():
 
     # امسح أي webhook موجود عشان Long Polling يشتغل
     await bot.start()
-    await bot.stop_propagation  # مش ضروري
     logger.info("✅ Bot started")
 
     await userbot.start()
