@@ -94,28 +94,16 @@ def fmt_duration(seconds):
 
 async def play_in_vc(chat_id, track):
     playing[chat_id] = track
-    # MediaStream بيحتاج ffmpeg - استخدم AudioPiped بدلها
-    from pytgcalls.types import AudioPiped
-    import subprocess
-    # شغل ffmpeg يحول الـ URL لـ stream
-    stream = AudioPiped(
+    stream = MediaStream(
         track["url"],
-        additional_ffmpeg_parameters="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+        audio_flags=MediaStream.Flags.IGNORE_PENDING,
     )
     try:
-        await call_py.join_group_call(chat_id, stream)
-        logger.info(f"joined VC and playing: {track['title']}")
+        await call_py.play(chat_id, stream)
+        logger.info(f"play() ok: {track['title']}")
     except Exception as e:
-        if "already" in str(e).lower():
-            try:
-                await call_py.change_stream(chat_id, stream)
-                logger.info(f"changed stream: {track['title']}")
-            except Exception as e2:
-                logger.error(f"change_stream failed: {e2}")
-                raise
-        else:
-            logger.error(f"join_group_call failed: {e}")
-            raise
+        logger.error(f"play() failed: {e}")
+        raise
 
 
 async def play_next(chat_id):
