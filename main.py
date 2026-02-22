@@ -96,7 +96,7 @@ async def play_in_vc(chat_id, track):
     playing[chat_id] = track
     stream = MediaStream(
         track["url"],
-        audio_flags=MediaStream.Flags.IGNORE_PENDING,
+        video_flags=MediaStream.Flags.IGNORE,
     )
     try:
         await call_py.play(chat_id, stream)
