@@ -13,7 +13,7 @@ from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 import yt_dlp
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
