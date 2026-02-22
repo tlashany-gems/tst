@@ -95,10 +95,20 @@ def fmt_duration(seconds):
 async def play_in_vc(chat_id, track):
     playing[chat_id] = track
     stream = MediaStream(track["url"])
+    # جرب change_stream الاول لو هو جوا بالفعل
     try:
         await call_py.change_stream(chat_id, stream)
-    except Exception:
+        logger.info(f"change_stream ok: {track['title']}")
+        return
+    except Exception as e:
+        logger.info(f"change_stream failed: {e}, trying play()...")
+    # play() هيدخل الـ VC تلقائياً ويشغل
+    try:
         await call_py.play(chat_id, stream)
+        logger.info(f"play() ok: {track['title']}")
+    except Exception as e:
+        logger.error(f"play() also failed: {e}")
+        raise
 
 
 async def play_next(chat_id):
