@@ -9,11 +9,10 @@ import logging
 from dotenv import load_dotenv
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message
-from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream
+from pytgcalls import GroupCallFile
 import yt_dlp
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -23,16 +22,12 @@ API_HASH     = os.getenv("API_HASH", "")
 BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 USER_SESSION = os.getenv("USER_SESSION", "")
 
-logger.info(f"API_ID: {API_ID}")
-logger.info(f"BOT_TOKEN: {BOT_TOKEN[:15]}...")
-logger.info(f"USER_SESSION length: {len(USER_SESSION)}")
-
-bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, sleep_threshold=60)
+bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 userbot = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
-call_py = PyTgCalls(userbot)
 
 queues:  dict[int, list] = {}
 playing: dict[int, dict] = {}
+calls:   dict[int, GroupCallFile] = {}
 
 
 def get_queue(chat_id):
@@ -47,25 +42,19 @@ def search_song(query):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "skip_download": True,
+        "outtmpl": f"/tmp/%(id)s.%(ext)s",
     }
     if not re.match(r"https?://", query):
         query = f"ytsearch1:{query}"
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=False)
+            info = ydl.extract_info(query, download=True)
             if "entries" in info:
                 info = info["entries"][0]
-            stream_url = None
-            for fmt in reversed(info.get("formats", [])):
-                if fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
-                    stream_url = fmt["url"]
-                    break
-            if not stream_url:
-                stream_url = info["url"]
+            filename = ydl.prepare_filename(info)
             return {
                 "title": info.get("title", "Unknown"),
-                "url": stream_url,
+                "file": filename,
                 "duration": info.get("duration", 0),
                 "webpage": info.get("webpage_url", ""),
             }
@@ -84,49 +73,32 @@ def fmt_duration(seconds):
 
 async def play_track(chat_id, track):
     playing[chat_id] = track
-    stream = MediaStream(track["url"])
-    try:
-        await call_py.change_stream(chat_id, stream)
-    except Exception:
-        await call_py.play(chat_id, stream)
-
-
-async def play_next(chat_id):
-    queue = get_queue(chat_id)
-    if queue:
-        await play_track(chat_id, queue.pop(0))
+    if chat_id not in calls:
+        call = GroupCallFile(userbot)
+        calls[chat_id] = call
+        await call.start(chat_id, track["file"])
     else:
-        playing.pop(chat_id, None)
-        try:
-            await call_py.leave_call(chat_id)
-        except Exception:
-            pass
+        calls[chat_id].input_filename = track["file"]
 
 
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, msg: Message):
-    logger.info(f"/start من {msg.from_user.id}")
+    logger.info(f"/start from {msg.from_user.id}")
     name = msg.from_user.first_name if msg.from_user else "صديقي"
     await msg.reply_text(
         f"👋 أهلاً **{name}**!\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "🎵 **بوت الموسيقى جاهز!**\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
+        "🎵 **بوت الموسيقى جاهز!**\n\n"
         "▶️ `/play <اسم>` — شغّل\n"
-        "🎵 `/now` — الشغال دلوقتي\n"
-        "📋 `/queue` — القائمة\n"
-        "⏭️ `/skip` — تخطي\n"
         "⏹️ `/stop` — وقف\n"
-        "🔊 `/volume <1-200>` — الصوت\n\n"
         "💡 مثال: `/play Fairuz`"
     )
 
 
 @bot.on_message(filters.command("play"))
 async def cmd_play(_, msg: Message):
-    logger.info(f"/play من {msg.chat.id}")
+    logger.info(f"/play from {msg.chat.id}")
     if len(msg.command) < 2:
-        await msg.reply_text("❌ اكتب اسم الأغنية!\nمثال: `/play Fairuz`")
+        await msg.reply_text("❌ اكتب اسم الأغنية!")
         return
     query = " ".join(msg.command[1:])
     chat_id = msg.chat.id
@@ -136,34 +108,8 @@ async def cmd_play(_, msg: Message):
         await status.edit_text("❌ مش لاقيها، جرب اسم تاني!")
         return
     dur = fmt_duration(track["duration"])
-    if playing.get(chat_id):
-        get_queue(chat_id).append(track)
-        pos = len(get_queue(chat_id))
-        await status.edit_text(f"✅ **اتضافت للقائمة #{pos}:**\n🎵 {track['title']}\n⏱️ {dur}")
-    else:
-        await status.edit_text(f"▶️ **بيشغل:**\n🎵 {track['title']}\n⏱️ {dur}")
-        await play_track(chat_id, track)
-
-
-@bot.on_message(filters.command("now"))
-async def cmd_now(_, msg: Message):
-    track = playing.get(msg.chat.id)
-    if not track:
-        await msg.reply_text("😶 مفيش أغنية شغالة.")
-        return
-    await msg.reply_text(
-        f"▶️ **شغال دلوقتي:**\n🎵 [{track['title']}]({track['webpage']})\n⏱️ {fmt_duration(track['duration'])}",
-        disable_web_page_preview=True,
-    )
-
-
-@bot.on_message(filters.command("skip"))
-async def cmd_skip(_, msg: Message):
-    if not playing.get(msg.chat.id):
-        await msg.reply_text("❌ مفيش أغنية!")
-        return
-    await msg.reply_text("⏭️ تخطي...")
-    await play_next(msg.chat.id)
+    await status.edit_text(f"▶️ **بيشغل:**\n🎵 {track['title']}\n⏱️ {dur}")
+    await play_track(chat_id, track)
 
 
 @bot.on_message(filters.command("stop"))
@@ -171,66 +117,19 @@ async def cmd_stop(_, msg: Message):
     chat_id = msg.chat.id
     queues.pop(chat_id, None)
     playing.pop(chat_id, None)
-    try:
-        await call_py.leave_call(chat_id)
-    except Exception:
-        pass
+    if chat_id in calls:
+        await calls[chat_id].stop()
+        calls.pop(chat_id)
     await msg.reply_text("⏹️ تم الإيقاف!")
 
 
-@bot.on_message(filters.command("queue"))
-async def cmd_queue(_, msg: Message):
-    chat_id = msg.chat.id
-    queue = get_queue(chat_id)
-    current = playing.get(chat_id)
-    if not current and not queue:
-        await msg.reply_text("📋 القائمة فاضية!")
-        return
-    lines = ["📋 **قائمة الانتظار:**\n"]
-    if current:
-        lines.append(f"▶️ **{current['title']}** ← شغال\n")
-    for i, t in enumerate(queue, 1):
-        lines.append(f"`{i}.` {t['title']} — ⏱️ {fmt_duration(t['duration'])}")
-    if not queue:
-        lines.append("_مفيش أغاني جاية_")
-    await msg.reply_text("\n".join(lines))
-
-
-@bot.on_message(filters.command("volume"))
-async def cmd_volume(_, msg: Message):
-    if len(msg.command) < 2 or not msg.command[1].isdigit():
-        await msg.reply_text("❌ مثال: `/volume 80`")
-        return
-    vol = max(1, min(200, int(msg.command[1])))
-    try:
-        await call_py.change_volume_call(msg.chat.id, vol)
-        await msg.reply_text(f"🔊 الصوت: **{vol}%**")
-    except Exception:
-        await msg.reply_text("❌ مش قادر أغير الصوت.")
-
-
-try:
-    from pytgcalls import filters as tgf
-    @call_py.on_update(tgf.stream_end)
-    async def on_end(_, update):
-        await play_next(update.chat_id)
-    logger.info("✅ stream_end v2.x")
-except Exception:
-    @call_py.on_stream_end()
-    async def on_end(_, update):
-        await play_next(update.chat_id)
-    logger.info("✅ stream_end legacy")
-
-
 async def main():
-    logger.info("🚀 بيشتغل...")
+    logger.info("🚀 Starting...")
     await bot.start()
     logger.info("✅ Bot started")
     await userbot.start()
-    logger.info("✅ Userbot started")
-    await call_py.start()
-    logger.info("✅ PyTgCalls started — البوت جاهز!")
-    await idle()  # من pyrogram — بيخلي الاتنين يشتغلوا صح
+    logger.info("✅ Userbot started — البوت جاهز!")
+    await idle()
 
 if __name__ == "__main__":
     asyncio.run(main())
