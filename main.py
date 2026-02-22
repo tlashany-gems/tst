@@ -13,10 +13,7 @@ from pytgcalls import PyTgCalls, idle
 from pytgcalls.types import MediaStream
 import yt_dlp
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -30,40 +27,26 @@ logger.info(f"API_ID: {API_ID}")
 logger.info(f"BOT_TOKEN: {BOT_TOKEN[:15]}...")
 logger.info(f"USER_SESSION length: {len(USER_SESSION)}")
 
-# ─── Clients ───
-bot = Client(
-    "music_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-)
-
-userbot = Client(
-    "userbot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=USER_SESSION,
-)
-
+bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+userbot = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=USER_SESSION)
 call_py = PyTgCalls(userbot)
 
-# ─── State ───
 queues:  dict[int, list] = {}
 playing: dict[int, dict] = {}
 
 
-def get_queue(chat_id: int) -> list:
+def get_queue(chat_id):
     if chat_id not in queues:
         queues[chat_id] = []
     return queues[chat_id]
 
 
-def search_song(query: str) -> dict | None:
+def search_song(query):
     ydl_opts = {
-        "format"       : "bestaudio/best",
-        "quiet"        : True,
-        "no_warnings"  : True,
-        "noplaylist"   : True,
+        "format": "bestaudio/best",
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
         "skip_download": True,
     }
     if not re.match(r"https?://", query):
@@ -81,17 +64,17 @@ def search_song(query: str) -> dict | None:
             if not stream_url:
                 stream_url = info["url"]
             return {
-                "title"   : info.get("title", "Unknown"),
-                "url"     : stream_url,
+                "title": info.get("title", "Unknown"),
+                "url": stream_url,
                 "duration": info.get("duration", 0),
-                "webpage" : info.get("webpage_url", ""),
+                "webpage": info.get("webpage_url", ""),
             }
     except Exception as e:
-        logger.error(f"[search error] {e}")
+        logger.error(f"search error: {e}")
         return None
 
 
-def fmt_duration(seconds) -> str:
+def fmt_duration(seconds):
     if not seconds:
         return "?"
     m, s = divmod(int(seconds), 60)
@@ -99,7 +82,7 @@ def fmt_duration(seconds) -> str:
     return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
 
 
-async def play_track(chat_id: int, track: dict):
+async def play_track(chat_id, track):
     playing[chat_id] = track
     stream = MediaStream(track["url"])
     try:
@@ -108,7 +91,7 @@ async def play_track(chat_id: int, track: dict):
         await call_py.play(chat_id, stream)
 
 
-async def play_next(chat_id: int):
+async def play_next(chat_id):
     queue = get_queue(chat_id)
     if queue:
         await play_track(chat_id, queue.pop(0))
@@ -120,49 +103,43 @@ async def play_next(chat_id: int):
             pass
 
 
-# ─── أوامر ───
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, msg: Message):
-    logger.info(f"✅ /start من {msg.from_user.id} في {msg.chat.id}")
+    logger.info(f"/start من {msg.from_user.id}")
     name = msg.from_user.first_name if msg.from_user else "صديقي"
     await msg.reply_text(
-        f"👋 أهلاً وسهلاً **{name}**!\n"
+        f"👋 أهلاً **{name}**!\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "🎵 **بوت الموسيقى جاهز لخدمتك!**\n"
+        "🎵 **بوت الموسيقى جاهز!**\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "**الأوامر المتاحة:**\n\n"
-        "▶️ `/play <اسم الأغنية>` — شغّل أغنية\n"
-        "🎵 `/now` — الأغنية الشغالة دلوقتي\n"
-        "📋 `/queue` — قائمة الانتظار\n"
-        "⏭️ `/skip` — تخطي الأغنية\n"
-        "⏹️ `/stop` — وقف وخروج\n"
-        "🔊 `/volume <1-200>` — التحكم في الصوت\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "💡 **مثال:** `/play Fairuz`\n"
-        "━━━━━━━━━━━━━━━━━━"
+        "▶️ `/play <اسم>` — شغّل\n"
+        "🎵 `/now` — الشغال دلوقتي\n"
+        "📋 `/queue` — القائمة\n"
+        "⏭️ `/skip` — تخطي\n"
+        "⏹️ `/stop` — وقف\n"
+        "🔊 `/volume <1-200>` — الصوت\n\n"
+        "💡 مثال: `/play Fairuz`"
     )
 
 
 @bot.on_message(filters.command("play"))
 async def cmd_play(_, msg: Message):
-    logger.info(f"▶️ /play من chat_id={msg.chat.id}")
+    logger.info(f"/play من {msg.chat.id}")
     if len(msg.command) < 2:
         await msg.reply_text("❌ اكتب اسم الأغنية!\nمثال: `/play Fairuz`")
         return
-    query   = " ".join(msg.command[1:])
+    query = " ".join(msg.command[1:])
     chat_id = msg.chat.id
-    status  = await msg.reply_text(f"🔍 بدور على: **{query}**...")
-    track   = await asyncio.get_event_loop().run_in_executor(None, search_song, query)
+    status = await msg.reply_text(f"🔍 بدور على: **{query}**...")
+    track = await asyncio.get_event_loop().run_in_executor(None, search_song, query)
     if not track:
-        await status.edit_text("❌ مش لاقي الأغنية دي، جرب اسم تاني!")
+        await status.edit_text("❌ مش لاقيها، جرب اسم تاني!")
         return
     dur = fmt_duration(track["duration"])
     if playing.get(chat_id):
         get_queue(chat_id).append(track)
         pos = len(get_queue(chat_id))
-        await status.edit_text(
-            f"✅ **اتضافت للقائمة:**\n🎵 {track['title']}\n⏱️ {dur}  |  📋 #{pos}"
-        )
+        await status.edit_text(f"✅ **اتضافت للقائمة #{pos}:**\n🎵 {track['title']}\n⏱️ {dur}")
     else:
         await status.edit_text(f"▶️ **بيشغل:**\n🎵 {track['title']}\n⏱️ {dur}")
         await play_track(chat_id, track)
@@ -172,12 +149,10 @@ async def cmd_play(_, msg: Message):
 async def cmd_now(_, msg: Message):
     track = playing.get(msg.chat.id)
     if not track:
-        await msg.reply_text("😶 مفيش أغنية شغالة دلوقتي.")
+        await msg.reply_text("😶 مفيش أغنية شغالة.")
         return
     await msg.reply_text(
-        f"▶️ **شغال دلوقتي:**\n"
-        f"🎵 [{track['title']}]({track['webpage']})\n"
-        f"⏱️ {fmt_duration(track['duration'])}",
+        f"▶️ **شغال دلوقتي:**\n🎵 [{track['title']}]({track['webpage']})\n⏱️ {fmt_duration(track['duration'])}",
         disable_web_page_preview=True,
     )
 
@@ -185,9 +160,9 @@ async def cmd_now(_, msg: Message):
 @bot.on_message(filters.command("skip"))
 async def cmd_skip(_, msg: Message):
     if not playing.get(msg.chat.id):
-        await msg.reply_text("❌ مفيش أغنية شغالة!")
+        await msg.reply_text("❌ مفيش أغنية!")
         return
-    await msg.reply_text("⏭️ بيتخطى...")
+    await msg.reply_text("⏭️ تخطي...")
     await play_next(msg.chat.id)
 
 
@@ -206,14 +181,14 @@ async def cmd_stop(_, msg: Message):
 @bot.on_message(filters.command("queue"))
 async def cmd_queue(_, msg: Message):
     chat_id = msg.chat.id
-    queue   = get_queue(chat_id)
+    queue = get_queue(chat_id)
     current = playing.get(chat_id)
     if not current and not queue:
         await msg.reply_text("📋 القائمة فاضية!")
         return
     lines = ["📋 **قائمة الانتظار:**\n"]
     if current:
-        lines.append(f"▶️ **{current['title']}** ← شغال دلوقتي\n")
+        lines.append(f"▶️ **{current['title']}** ← شغال\n")
     for i, t in enumerate(queue, 1):
         lines.append(f"`{i}.` {t['title']} — ⏱️ {fmt_duration(t['duration'])}")
     if not queue:
@@ -234,36 +209,27 @@ async def cmd_volume(_, msg: Message):
         await msg.reply_text("❌ مش قادر أغير الصوت.")
 
 
-# ─── Stream End ───
 try:
-    from pytgcalls import filters as tgfilters
-
-    @call_py.on_update(tgfilters.stream_end)
-    async def stream_end_handler(_, update):
+    from pytgcalls import filters as tgf
+    @call_py.on_update(tgf.stream_end)
+    async def on_end(_, update):
         await play_next(update.chat_id)
-
-    logger.info("✅ stream_end handler registered (v2.x)")
-except (ImportError, AttributeError):
+    logger.info("✅ stream_end v2.x")
+except Exception:
     @call_py.on_stream_end()
-    async def stream_end_handler(_, update):
+    async def on_end(_, update):
         await play_next(update.chat_id)
-
-    logger.info("✅ stream_end handler registered (legacy)")
+    logger.info("✅ stream_end legacy")
 
 
 async def main():
     logger.info("🚀 بيشتغل...")
-
-    # امسح أي webhook موجود عشان Long Polling يشتغل
     await bot.start()
     logger.info("✅ Bot started")
-
     await userbot.start()
     logger.info("✅ Userbot started")
-
     await call_py.start()
-    logger.info("✅ PyTgCalls started")
-    logger.info("✅ البوت جاهز!")
+    logger.info("✅ PyTgCalls started — البوت جاهز!")
     await idle()
 
 if __name__ == "__main__":
